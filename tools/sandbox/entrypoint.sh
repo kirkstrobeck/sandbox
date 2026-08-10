@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs as root, sets up the agent user's world, then drops privileges for the
+# long-lived container process.
+
+# Match the host Docker socket GID so the agent user can talk to the host Docker
+# daemon (Colima) through the mounted socket. Without this, every sibling
+# container command fails with a bare permission error.
+if [ -S /var/run/docker.sock ]; then
+  sock_gid="$(stat -c '%g' /var/run/docker.sock)"
+  if [ "$sock_gid" != "0" ] && ! id -G agent | tr ' ' '\n' | grep -qx "$sock_gid"; then
+    getent group "$sock_gid" >/dev/null || groupadd -g "$sock_gid" docker-host
+    usermod -aG "$sock_gid" agent
+  fi
+fi
+
+# Inner's user-global instructions come from the baked-in rules, so it does the
+# work directly instead of recursively dispatching back into its own sandbox.
+# Both filenames are seeded because either agent may be the one running.
+mkdir -p /home/agent/.claude /home/agent/.codex
+if [ -f /etc/sandbox-agent.md ]; then
+  cp -f /etc/sandbox-agent.md /home/agent/.claude/CLAUDE.md 2>/dev/null || true
+  cp -f /etc/sandbox-agent.md /home/agent/.codex/AGENTS.md 2>/dev/null || true
+  chown agent:"$(id -g agent)" /home/agent/.claude/CLAUDE.md /home/agent/.codex/AGENTS.md 2>/dev/null || true
+fi
+
+as_agent() { gosu agent env HOME=/home/agent "$@"; }
+
+# Mirror the host git identity so commits made inside carry the right author.
+# Best-effort throughout: a transient config failure must never stop the
+# container from starting, or a bad `git config` bricks the whole sandbox.
+if [ -n "${HOST_GIT_NAME:-}" ]; then
+  as_agent git config --global user.name "$HOST_GIT_NAME" || true
+fi
+if [ -n "${HOST_GIT_EMAIL:-}" ]; then
+  as_agent git config --global user.email "$HOST_GIT_EMAIL" || true
+fi
+
+# Authenticate git to GitHub through the bridged token. gh reads the hosts.yml
+# that github-token-sync.sh wrote into the mounted config dir and hands git a
+# username/password on demand — no key, no ssh-agent, no prompt.
+as_agent git config --global \
+  'credential.https://github.com.helper' '!gh auth git-credential' || true
+
+# DELIBERATE: the SSH->HTTPS rewrite lives in the container's ~/.gitconfig, not
+# in the repo. .git/config is inside the bind-mounted worktree — the SAME FILE
+# the Mac uses — so rewriting `origin` to suit the container would break every
+# push the human makes outside it. Here, an SSH-form remote silently resolves to
+# HTTPS and picks up the bridged token; on the Mac the remote is untouched.
+as_agent git config --global 'url.https://github.com/.insteadOf' 'git@github.com:' || true
+
+# Never let a bare `git commit` (no -m/-F) open an editor and hang a
+# non-interactive agent run forever. Failing fast is the desired behavior.
+as_agent git config --global core.editor /bin/false || true
+export GIT_EDITOR=/bin/false VISUAL=/bin/false EDITOR=/bin/false
+
+# Marker the gates read: anything running in here is already inside the
+# boundary, so the outer-agent restrictions must not apply.
+export SANDBOX_INNER=1
+
+exec gosu agent env HOME=/home/agent SANDBOX_INNER=1 "$@"

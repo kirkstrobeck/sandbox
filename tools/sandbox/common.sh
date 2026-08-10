@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Shared identity + daemon resolution for the sandbox scripts. Source, don't run.
+#
+# Every script here must agree on REPO_ROOT and SANDBOX_NAME, or they'll talk to
+# different containers. This file is the single place that decides both.
+
+SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# -P resolves symlinks. The path is handed to the host Docker daemon for bind
+# mounts, and the daemon only knows physical paths.
+REPO_ROOT="$(cd "$SANDBOX_DIR/../.." && pwd -P)"
+CACHE_DIR="$SANDBOX_DIR/.cache"
+
+# shellcheck source=config.sh
+. "$SANDBOX_DIR/config.sh"
+
+# Hashed suffix, so two worktrees of the same repo get two containers instead of
+# fighting over one. Same repo path always yields the same name.
+SANDBOX_NAME="${SANDBOX_PROJECT}-sandbox-$(printf '%s' "$REPO_ROOT" | shasum | cut -c1-8)"
+
+export SANDBOX_DIR REPO_ROOT CACHE_DIR SANDBOX_NAME
+
+# Colima, not Docker Desktop. Its socket lives under ~/.colima, and nothing
+# creates /var/run/docker.sock, so DOCKER_HOST must be set explicitly. A Docker
+# Desktop install that does create the default socket still works — this only
+# overrides when a Colima socket is actually there.
+sandbox_docker_host() {
+  local sock="$HOME/.colima/${COLIMA_PROFILE:-default}/docker.sock"
+  if [ -S "$sock" ]; then
+    export DOCKER_HOST="unix://$sock"
+  fi
+}
+
+# Resolved at source time, not left to each caller. Every script here shells out
+# to docker, and a script that forgets the call talks to a socket that isn't
+# there — which surfaces as "dial unix /var/run/docker.sock: no such file or
+# directory" from a command that has nothing to do with sockets.
+sandbox_docker_host
+
+sandbox_require_docker() {
+  if docker info >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Docker daemon not reachable. Start it with: colima start" >&2
+  return 1
+}
+
+# Space/newline separated config lists -> one item per line, blanks dropped.
+sandbox_list() {
+  printf '%s\n' $1
+}

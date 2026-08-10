@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# The one command. Everything else is an implementation detail.
+#
+#   ./sandbox "add a health check endpoint"   send work to the inner agent
+#   ./sandbox -c "now add a test for it"      continue the same thread
+#   ./sandbox result                          re-read the last answer
+#   ./sandbox tail -f                         watch the inner agent work
+#   ./sandbox up                              start the container
+#   ./sandbox shell                           get a shell inside it
+#   ./sandbox run pnpm test                   run one command inside it
+#   ./sandbox status                          what is running
+#   ./sandbox doctor                          check the host setup
+#   ./sandbox rebuild                         force an image rebuild
+#   ./sandbox stop                            stop the container
+#   ./sandbox test                            run the gate test suite
+
+set -uo pipefail
+CLI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+S="$CLI_DIR/tools/sandbox"
+
+if [ ! -d "$S" ]; then
+  echo "tools/sandbox not found next to this script." >&2
+  exit 1
+fi
+
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
+
+cmd="${1:-}"
+case "$cmd" in
+  ''|-h|--help|help) usage; exit 0 ;;
+  up)      shift; exec bash "$S/boot.sh" "$@" ;;
+  shell)   shift; exec bash "$S/run.sh" "$@" ;;
+  run)     shift; exec bash "$S/run.sh" "$@" ;;
+  tail)    shift; exec bash "$S/tail.sh" "$@" ;;
+  status)  shift; exec bash "$S/status.sh" "$@" ;;
+  doctor)  shift; exec bash "$S/doctor.sh" "$@" ;;
+  test)    shift; exec bash "$S/gate-test.sh" "$@" ;;
+  result)  shift; exec bash "$S/dispatch.sh" --result "$@" ;;
+  rebuild) shift; SANDBOX_REBUILD=1 exec bash "$S/boot.sh" "$@" ;;
+  stop)    shift; exec bash "$S/status.sh" --stop "$@" ;;
+esac
+
+# Anything else is a message for the inner agent. `./sandbox "do the thing"`
+# should just work, without a verb in front of it.
+exec bash "$S/dispatch.sh" "$@"

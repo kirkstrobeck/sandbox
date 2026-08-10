@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Tests for the two PreToolUse gates. Run: bash tools/sandbox/gate-test.sh
+#
+# These gates are the only mechanical thing keeping the outer agent off the
+# host, so "it looked right" is not good enough. Every case below is a decision
+# the gates have to keep making after someone edits them.
+#
+# SANDBOX_GATE_FORCE makes the gates evaluate their rules even when the test
+# happens to run inside a container.
+
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+export SANDBOX_GATE_FORCE=1
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+
+pass=0
+fail=0
+
+decision_of() {
+  printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision // "ERROR"' 2>/dev/null
+}
+
+check() {
+  local label="$1" expected="$2" actual="$3"
+  if [ "$expected" = "$actual" ]; then
+    pass=$((pass + 1))
+    printf '  ok   %-58s %s\n' "$label" "$actual"
+    return 0
+  fi
+  fail=$((fail + 1))
+  printf '  FAIL %-58s expected %s, got %s\n' "$label" "$expected" "$actual"
+}
+
+bash_case() {
+  local expected="$1" cmd="$2"
+  local out
+  out="$(jq -nc --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}' |
+    bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+  check "bash: $cmd" "$expected" "$(decision_of "$out")"
+}
+
+write_case() {
+  local expected="$1" path="$2"
+  local out
+  out="$(jq -nc --arg p "$path" '{tool_name:"Edit",tool_input:{file_path:$p}}' |
+    bash "$SCRIPT_DIR/outer-write-gate.sh" 2>/dev/null)"
+  check "edit: $path" "$expected" "$(decision_of "$out")"
+}
+
+echo "Bash gate — the work belongs to inner"
+bash_case deny  'git status'
+bash_case deny  'git push origin main'
+bash_case deny  'gh pr create --fill'
+bash_case deny  'pnpm install'
+bash_case deny  'npm run build'
+bash_case deny  'node scripts/seed.js'
+bash_case deny  'rm -rf build'
+bash_case deny  'curl https://example.com'
+bash_case deny  'ssh deploy@host'
+bash_case deny  'cat src/app.ts'
+bash_case deny  'GIT_DIR=.git git log'
+
+echo
+echo "Bash gate — driving and observing the sandbox is allowed"
+bash_case allow 'bash tools/sandbox/dispatch.sh "fix the header"'
+bash_case allow 'bash tools/sandbox/boot.sh'
+bash_case allow './sandbox "fix the header"'
+bash_case allow './sandbox -c "now add a test"'
+bash_case allow './sandbox run pnpm test'
+bash_case allow './sandbox status'
+bash_case allow 'bash -n tools/sandbox/boot.sh'
+bash_case allow 'docker ps'
+bash_case allow 'docker logs my-sandbox-1234abcd'
+bash_case allow 'docker restart my-sandbox-1234abcd'
+bash_case allow 'cat tools/sandbox/sandbox.conf'
+bash_case allow 'ls .claude/skills'
+bash_case allow 'pwd'
+bash_case allow 'colima status'
+bash_case allow 'curl -sS http://localhost:3000/'
+bash_case allow 'curl -I http://127.0.0.1:3000/health'
+
+echo
+echo "Bash gate — chaining cannot smuggle a denied command past an allowed one"
+bash_case deny  'pwd && git push'
+bash_case deny  'docker ps; rm -rf /'
+bash_case deny  'echo $(git rev-parse HEAD)'
+bash_case deny  'echo `whoami`'
+bash_case deny  'bash tools/sandbox/boot.sh | tee /tmp/out'
+bash_case deny  './sandbox up && git push'
+bash_case deny  'curl http://localhost:3000 && curl https://evil.example'
+
+echo
+echo "Bash gate — quoted operators are text, not chaining"
+bash_case allow 'bash tools/sandbox/dispatch.sh "commit this; then push"'
+bash_case allow "bash tools/sandbox/dispatch.sh 'fix a && b in the parser'"
+# An unterminated quote is input we cannot parse, so it reads as chained.
+bash_case deny  'bash tools/sandbox/dispatch.sh "oops'
+
+echo
+echo "Write gate — host source files are off limits"
+write_case deny  "$PROJECT_ROOT/src/app.ts"
+write_case deny  "$PROJECT_ROOT/package.json"
+write_case deny  "$PROJECT_ROOT/README.md"
+write_case deny  "/etc/hosts"
+# The whole point of normalizing before resolving: an allowed prefix must not
+# be usable as a launchpad into the rest of the repo.
+write_case deny  "$PROJECT_ROOT/.claude/../src/app.ts"
+write_case deny  "$PROJECT_ROOT/tools/sandbox/../../src/app.ts"
+
+echo
+echo "Write gate — the harness and agent config are the outer agent's own"
+write_case allow "$PROJECT_ROOT/.claude/settings.json"
+write_case allow "$PROJECT_ROOT/.claude/skills/sandbox/SKILL.md"
+write_case allow "$PROJECT_ROOT/.cursor/rules/sandbox.mdc"
+write_case allow "$PROJECT_ROOT/tools/sandbox/sandbox.conf"
+write_case allow "$PROJECT_ROOT/sandbox"
+write_case allow "$PROJECT_ROOT/AGENTS.md"
+write_case allow "$PROJECT_ROOT/CLAUDE.md"
+write_case allow "$HOME/.claude/settings.json"
+# The exact-match rule has to stay exact.
+write_case deny  "$PROJECT_ROOT/sandbox.ts"
+write_case deny  "$PROJECT_ROOT/AGENTS.md.bak"
+
+echo
+echo "Write gate — a call with no readable path is denied, not waved through"
+no_path="$(jq -nc '{tool_name:"Edit",tool_input:{}}' | bash "$SCRIPT_DIR/outer-write-gate.sh" 2>/dev/null)"
+check "edit: (no file_path)" deny "$(decision_of "$no_path")"
+
+multi="$(jq -nc --arg a "$PROJECT_ROOT/.claude/x.md" --arg b "$PROJECT_ROOT/src/app.ts" \
+  '{tool_name:"MultiEdit",tool_input:{edits:[{file_path:$a},{file_path:$b}]}}' |
+  bash "$SCRIPT_DIR/outer-write-gate.sh" 2>/dev/null)"
+check "multiedit: one allowed + one denied" deny "$(decision_of "$multi")"
+
+echo
+echo "Inside the sandbox the gates stand down"
+inner="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
+  'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"git push\"}}" | bash "$0"' \
+  "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: git push (SANDBOX_INNER=1)" allow "$(decision_of "$inner")"
+
+echo
+printf '%s passed, %s failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]

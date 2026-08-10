@@ -1,0 +1,13 @@
+# Credentials live here: bridged Claude and Codex OAuth tokens, a synthesized
+# gh hosts.yml holding a GitHub token, and the inner agent's run transcripts.
+# Committing this directory publishes working credentials. Never do it.
+tools/sandbox/.cache/
+
+# Machine-local overrides (different ports, a different Colima profile).
+tools/sandbox/sandbox.local.conf
+
+# Claude Code writes per-machine permission state here.
+.claude/settings.local.json
+
+.DS_Store
+node_modules/
