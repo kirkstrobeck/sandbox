@@ -122,6 +122,9 @@ should push. `./sandbox doctor` reports each one and prints the exact fix.
   do when the daemon isn't reachable.
 - [docs/hot-reload.md](docs/hot-reload.md) — why saving a file on the Mac
   reloads inside the container.
+- [docs/security.md](docs/security.md) — threat model, what crosses the trust
+  boundary, residual risks, and keeping guardrails aligned with capability.
+  **Use at your own risk; no warranty.**
 
 ## License
 
