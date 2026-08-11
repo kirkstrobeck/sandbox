@@ -66,8 +66,11 @@ case "$stripped" in
     allow_unchained "sandbox harness command" ;;
   bash\ -n\ tools/sandbox/*)
     allow_unchained "syntax check of a sandbox script" ;;
-  # The CLI wrapper is the intended door. Every verb behind it either drives the
-  # container or dispatches into it; none of them act on the host.
+  # The CLI wrapper is the intended door. Every verb behind it drives the
+  # container or dispatches into it, with one deliberate exception: `update`
+  # replaces tools/sandbox with a newer copy from upstream. That is a harness
+  # operation, not project work — it touches no file the project owns, and the
+  # result is a reviewable diff — so it stays on this side of the line.
   ./sandbox|./sandbox\ *|bash\ ./sandbox\ *|bash\ sandbox\ *)
     allow_unchained "sandbox CLI" ;;
 esac

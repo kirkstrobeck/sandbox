@@ -13,6 +13,7 @@
 #   ./sandbox rebuild                         force an image rebuild
 #   ./sandbox stop                            stop the container
 #   ./sandbox test                            run the gate test suite
+#   ./sandbox update                          upgrade the harness from upstream
 
 set -uo pipefail
 CLI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -23,7 +24,10 @@ if [ ! -d "$S" ]; then
   exit 1
 fi
 
-usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
+# The header comment above is the help text. Read it up to the first line that
+# isn't a comment, rather than a line range that goes stale the moment a verb is
+# added — it used to print `set -uo pipefail` at the end for exactly that reason.
+usage() { awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "${BASH_SOURCE[0]}" >&2; }
 
 cmd="${1:-}"
 case "$cmd" in
@@ -38,6 +42,10 @@ case "$cmd" in
   result)  shift; exec bash "$S/dispatch.sh" --result "$@" ;;
   rebuild) shift; SANDBOX_REBUILD=1 exec bash "$S/boot.sh" "$@" ;;
   stop)    shift; exec bash "$S/status.sh" --stop "$@" ;;
+  # The one verb that writes to the project rather than driving the container.
+  # It replaces tools/sandbox with a newer copy from the repo this was installed
+  # from; sandbox.conf, AGENTS.md and CLAUDE.md are preserved.
+  update)  shift; exec bash "$S/update.sh" "$@" ;;
 esac
 
 # Anything else is a message for the inner agent. `./sandbox "do the thing"`

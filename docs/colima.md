@@ -135,12 +135,26 @@ problem it finds.
 The VM is down. `colima start --vm-type vz --mount-type virtiofs`, or let
 `./sandbox up` do it.
 
+**`Host port 127.0.0.1:3000 is in use; publishing 127.0.0.1:3001 -> container
+3000 instead.`**
+
+Not an error. Something else on the Mac holds the host port you configured, so
+`boot.sh` published the next free one up instead. The container port is
+unchanged — the dev server still binds 3000 inside — so the only thing that
+moved is the number you open in a browser. `./sandbox status` prints what the
+container actually got. Nothing was written to your config; if you want the new
+number to be permanent, put it in `sandbox.local.conf` yourself. Details in
+[configuration.md](configuration.md#the-host-port-is-a-preference-not-a-requirement).
+
 **`port is already allocated`**
 
-Something else on the Mac already holds a host port from `SANDBOX_PORTS`.
-`boot.sh` catches this and prints the fix rather than leaving you with Docker's
-message: free the port, or pick a different host port in the gitignored
-`tools/sandbox/sandbox.local.conf`, which is sourced last and never committed:
+The auto-pick above did not save you. Two ways that happens: every port in the
+scan window above the configured one is taken too (`SANDBOX_PORT_SCAN_LIMIT`,
+default 20, widens it), or `lsof` is not on `PATH`, so nothing could detect the
+conflict before `docker run` hit it. `boot.sh` catches the failure and prints
+the fix rather than leaving you with Docker's message: free the port, or pin a
+different host port in the gitignored `tools/sandbox/sandbox.local.conf`, which
+is sourced last and never committed:
 
 ```bash
 SANDBOX_PORTS="127.0.0.1:3100:3000"

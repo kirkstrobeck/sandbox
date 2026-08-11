@@ -53,5 +53,11 @@ send a follow-up with `-c`; the thread is preserved.
   add a polling watcher to "fix" it.
 - **`tools/sandbox/.cache/` holds live credentials.** Never read it out, never
   print it, never commit it.
+- **The harness is installed, not written here.** It comes from
+  https://github.com/kirkstrobeck/sandbox; `tools/sandbox/ORIGIN.md` records the
+  ref and commit. `./sandbox update` replaces it with a newer copy and preserves
+  `sandbox.conf`. It is the one verb that writes to the repo on the host, so run
+  it when the human asks — not on your own initiative. `./sandbox up` may print
+  one line a day saying an update exists; that line changes nothing by itself.
 - **You cannot run `./sandbox` from inside the sandbox.** If `SANDBOX_INNER` is
   set, you are the inner agent — read `/home/agent/.claude/CLAUDE.md` instead.

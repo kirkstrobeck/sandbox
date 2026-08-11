@@ -160,4 +160,7 @@ mount. The usual culprit is a Colima `--mount-inotify` daemon that came back;
 **The browser cannot reach the dev server.** That is not hot reload. The server
 must bind `0.0.0.0` inside the container — binding `127.0.0.1` makes it
 unreachable from the Mac — and the port must be published in `SANDBOX_PORTS`.
-See [configuration.md](configuration.md).
+Check the number too: if the configured host port was taken at boot, the
+harness published the next free one and logged the remap, and `./sandbox status`
+prints what the container actually got. See
+[configuration.md](configuration.md).

@@ -91,6 +91,15 @@ container_is_current() {
   return 0
 }
 
+# Host ports the container we are about to remove currently holds, as
+# "HostIp:HostPort" lines. They belong to us, so the resolver must not count
+# them as taken — see SANDBOX_PORTS_RELEASED in run-args.sh.
+old_host_ports() {
+  docker inspect -f \
+    '{{range $p, $bs := .HostConfig.PortBindings}}{{range $bs}}{{.HostIp}}:{{.HostPort}}{{"\n"}}{{end}}{{end}}' \
+    "$SANDBOX_NAME" 2>/dev/null || true
+}
+
 # Docker names the symptom and stops. The two failures people actually hit here
 # have specific fixes, and printing them is the difference between a five-second
 # correction and a debugging session.
@@ -98,8 +107,12 @@ explain_run_failure() {
   case "$1" in
     *"port is already allocated"*)
       log ""
-      log "Something else on this Mac already holds a port from SANDBOX_PORTS."
-      log "Free it, or pick a different host port in tools/sandbox/sandbox.local.conf:"
+      log "A host port from SANDBOX_PORTS is held by something else, and the"
+      log "auto-pick did not get out of the way: either every port in the scan"
+      log "window above it is taken too, or lsof is not on PATH, so the conflict"
+      log "only surfaced at docker run."
+      log "Free the port, widen the search with SANDBOX_PORT_SCAN_LIMIT, or pin a"
+      log "different host port in tools/sandbox/sandbox.local.conf:"
       log "  SANDBOX_PORTS=\"127.0.0.1:3100:3000\""
       ;;
     *"mount source path"*)
@@ -117,8 +130,14 @@ ensure_container() {
   fi
   if container_exists; then
     log "Sandbox config changed; recreating $SANDBOX_NAME."
+    SANDBOX_PORTS_RELEASED="$(old_host_ports)"
     docker rm -f "$SANDBOX_NAME" >/dev/null 2>&1 || true
   fi
+
+  # Once, here, before the args are built: a host port that is taken gets
+  # remapped upward and everything downstream — including the -p flags — sees
+  # the resolved list rather than the configured one.
+  SANDBOX_PORTS_RESOLVED="$(sandbox_resolve_ports)"
 
   local args=()
   while IFS= read -r line; do
@@ -143,5 +162,10 @@ prepare_cache
 ensure_container
 fix_volume_ownership
 ensure_mac_save_bridge
+
+# Last, and never fatal: at most one line saying a newer harness exists. It
+# reports the previous check's answer and refreshes in the background, so a slow
+# or absent network costs a boot nothing. Nothing is updated without being asked.
+bash "$SCRIPT_DIR/update.sh" --nudge >/dev/null || true
 
 printf '%s\n' "$SANDBOX_NAME"

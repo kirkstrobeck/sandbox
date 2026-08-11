@@ -24,6 +24,7 @@ reference for carrying it out.
 | `./sandbox rebuild` | Force an image rebuild. |
 | `./sandbox stop` | Stop the container; cache and credentials survive. |
 | `./sandbox test` | Run the gate test suite. |
+| `./sandbox update` | Upgrade `tools/sandbox` from the repo it was installed from. |
 
 A long message is safer on stdin than as an argument:
 `printf '%s' "$LONG" | ./sandbox`
@@ -58,6 +59,23 @@ virtiofs is two orders of magnitude slower than the native path.
 **Config changed but the container ignores it.** Ports, mounts, and volumes are
 fixed at creation. `./sandbox up` detects the drift and recreates. If it
 doesn't, `./sandbox rebuild`.
+
+## Upgrading the harness
+
+`tools/sandbox/` is installed from https://github.com/kirkstrobeck/sandbox, not
+written for this project — `tools/sandbox/ORIGIN.md` records the repo, ref and
+commit. A fix you make in there is overwritten by the next upgrade, so it
+belongs upstream.
+
+`./sandbox update` fetches that repo and reruns its `install.sh` here:
+`tools/sandbox` and `./sandbox` are replaced, `sandbox.conf`,
+`sandbox.local.conf`, `AGENTS.md` and `CLAUDE.md` are kept, hooks are re-merged,
+and the changed files are printed. It is the one CLI verb that writes to the
+project on the host, so run it when the human asks for it — not on your own
+initiative — and follow it with `./sandbox up`.
+
+`./sandbox up` may print a line saying a newer harness exists. That is a
+once-a-day background check, and it changes nothing by itself.
 
 ## Choosing the inner agent
 

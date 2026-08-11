@@ -51,7 +51,9 @@ checks that the running container matches what the config now asks for:
 - the image id matches the current `SANDBOX_IMAGE`
 - `/workspace`, the host repo path, and `/home/agent/.config/gh` are all mounted
 - every directory in `SANDBOX_VOLUME_DIRS` has a mount at `/workspace/<dir>`
-- every container port in `SANDBOX_PORTS` appears in the port bindings
+- every container port in `SANDBOX_PORTS` appears in the port bindings — the
+  *container* half only, so a host port that got auto-picked (below) does not
+  make a healthy container look stale on the next boot
 
 Any mismatch and it recreates:
 
@@ -96,7 +98,7 @@ harness upgrade reaches machines that would otherwise keep using a stale image.
 ### `SANDBOX_PORTS`
 
 Default empty. Ports published from the container to the Mac, one entry per line
-or word, in Docker's `HOST:CONTAINER` form.
+or word, in Docker's `IP:HOST:CONTAINER` or `HOST:CONTAINER` form.
 
 ```bash
 SANDBOX_PORTS="127.0.0.1:3000:3000 127.0.0.1:5432:5432"
@@ -106,9 +108,46 @@ Bind to `127.0.0.1` unless you actually want the dev server reachable from your
 network. Note the other half of this: the server *inside* the container must
 bind `0.0.0.0`, or the published port reaches nothing.
 
-Change it when you add a service or when a host port is taken — the
-`port is already allocated` failure is the common one, and `boot.sh` prints the
-fix. **Fixed at container creation.**
+**Fixed at container creation.**
+
+#### The host port is a preference, not a requirement
+
+A busy host port used to be a hard failure. It is now a remap: before
+`docker run`, `boot.sh` calls `sandbox_resolve_ports` in `run-args.sh`, which
+checks each host port with an `lsof` listen check and — if something already
+holds it — walks upward on the *same bind address* until it finds one free.
+
+```
+Host port 127.0.0.1:3000 is in use; publishing 127.0.0.1:3001 -> container 3000 instead.
+```
+
+What that does and does not change:
+
+- **The container port never moves.** Your dev server keeps binding 3000; only
+  the number you type into a browser changes. `./sandbox status` prints the
+  bindings the container actually got.
+- **Nothing is written to `sandbox.local.conf`.** A remap is a fact about this
+  boot, not a decision about the project. If you want the new number to stick,
+  put it in the file yourself.
+- **The configured port is always preferred.** It is taken as-is whenever it is
+  free, so the remap does not creep upward on every boot.
+- **Only the two documented forms are rewritten.** A bare container port, an
+  IPv6 literal, a port range, a `/udp` suffix — all passed through untouched
+  and left to Docker.
+- **The address matters.** A process on `0.0.0.0:3000` blocks a bind to
+  `127.0.0.1:3000` and counts as busy; a process on `127.0.0.1:3000` does not
+  block `192.168.1.5:3000` and does not.
+- **A recreate does not fight itself.** `boot.sh` records the outgoing
+  container's bindings and hands them to the resolver as already-released, so a
+  config change does not bump the port just because Docker's proxy has not torn
+  down yet.
+- **Without `lsof` there is no remap.** The resolver has no opinion it cannot
+  support, so it publishes what you configured and lets Docker produce the
+  error — the behaviour that predates this.
+
+`SANDBOX_PORT_SCAN_LIMIT` (default `20`) bounds the walk. If every port in the
+window is taken, boot warns, keeps the configured port, and lets `docker run`
+fail with `port is already allocated` — which `boot.sh` still explains.
 
 ### `SANDBOX_VOLUME_DIRS`
 
@@ -179,12 +218,71 @@ Pin them — a floating toolchain is how the container and CI quietly stop
 agreeing. All six are `docker build` args, so a change needs either a
 `SANDBOX_STACK` bump or an explicit `./sandbox rebuild`.
 
+## Upgrading the harness itself
+
+`tools/sandbox/` and the `./sandbox` script are installed from
+https://github.com/kirkstrobeck/sandbox — they are not project code.
+`tools/sandbox/ORIGIN.md` says so in the directory, and carries the repo, ref
+and commit the current copy came from as `KEY=value` lines:
+
+```
+SANDBOX_ORIGIN_REPO=kirkstrobeck/sandbox
+SANDBOX_ORIGIN_REF=main
+SANDBOX_ORIGIN_COMMIT=<sha>
+```
+
+```bash
+./sandbox update                              # fetch that repo at that ref, reinstall here
+./sandbox update --ref v2                     # and pin the project to a different ref
+./sandbox update --repo you/sandbox           # or to your fork; ORIGIN.md remembers
+./sandbox update --from ../sandbox            # from a local checkout, no network
+./sandbox update --check                      # is there anything newer? exit 1 if yes
+```
+
+The update *is* `install.sh`, fetched with the tarball and run against this
+directory, so the rules are the install rules and there is no second copy of
+them to drift: `tools/sandbox` and `./sandbox` are replaced, `sandbox.conf`,
+`sandbox.local.conf`, `AGENTS.md` and `CLAUDE.md` are preserved, the incoming
+defaults land beside your config as `sandbox.conf.new`, and the PreToolUse hooks
+are re-merged into `.claude/settings.json` without touching your other hooks.
+The changed files are listed when it finishes. Run `./sandbox up` afterwards —
+a new `SANDBOX_STACK` or run-args change only takes effect on the next boot.
+
+Running it in a clone of the sandbox repo itself is refused: there, upstream
+would overwrite the working copy. `git pull`, or `--force` if you meant it.
+
+### `SANDBOX_UPDATE_CHECK`
+
+Default `1`. Once a day, `./sandbox up` asks the GitHub API which commit the
+recorded ref points at and prints one line if it differs from
+`SANDBOX_ORIGIN_COMMIT`:
+
+```
+A newer sandbox harness is available (kirkstrobeck/sandbox@main) — run: ./sandbox update
+```
+
+The request is unauthenticated, detached, and capped at 8 seconds
+(`SANDBOX_UPDATE_TIMEOUT`), and the line you see is the *previous* check's
+answer — a boot never waits on the network for it. Nothing is fetched or changed
+without `./sandbox update`. An install with no commit recorded, an unreachable
+github.com, a rate limit: all report "cannot tell" to `--check` and stay silent
+on boot.
+
+Set to `0` in `sandbox.conf` to switch it off for the project, or export
+`SANDBOX_UPDATE_CHECK=0` to switch it off for a shell — this is the one setting
+where the environment beats the file, because a kill switch that a config file
+can override is not one.
+
 ## Environment variables, not in the file
 
 | Variable | Effect |
 | --- | --- |
 | `SANDBOX_AGENT` | Inner agent for this invocation. Beats detection and the default. |
 | `SANDBOX_REBUILD=1` | Forces an image rebuild. What `./sandbox rebuild` sets. |
+| `SANDBOX_PORT_SCAN_LIMIT` | How far above a busy host port to look for a free one. Default `20`. |
+| `SANDBOX_UPDATE_CHECK=0` | Silences the daily "a newer harness exists" check for this shell. |
+| `SANDBOX_UPDATE_TIMEOUT` | Seconds the update check waits on the GitHub API. Default `8`. |
+| `SANDBOX_REPO` / `SANDBOX_REF` | Override the repo and ref `install.sh` and `./sandbox update` fetch. |
 | `COLIMA_PROFILE` | Non-default Colima profile, for socket resolution and the inotify daemon stop. |
 | `GH_TOKEN` / `GITHUB_TOKEN` | Taken ahead of `gh auth token` when bridging GitHub auth. |
 | `SANDBOX_INNER` | Set to `1` inside the container. If you see it, you are the inner agent. |
@@ -192,8 +290,9 @@ agreeing. All six are `docker build` args, so a change needs either a
 ## After a change
 
 ```bash
-./sandbox doctor    # host, daemon, credentials, gitignore, hooks — with the fix for each
+./sandbox doctor    # host, daemon, credentials, gitignore, hooks, upstream — with the fix for each
 ./sandbox status    # what is actually running: image, ports, bridge, live run
 ./sandbox up        # apply config: recreates the container on drift, restarts the bridge
 ./sandbox rebuild   # force the image too
+./sandbox update    # replace the harness itself with a newer one from upstream
 ```

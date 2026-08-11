@@ -68,6 +68,10 @@ bash_case allow './sandbox "fix the header"'
 bash_case allow './sandbox -c "now add a test"'
 bash_case allow './sandbox run pnpm test'
 bash_case allow './sandbox status'
+# The deliberate exception: `update` writes to tools/sandbox on the host. It is
+# a harness operation with a reviewable diff, and the CLI is the door for it.
+bash_case allow './sandbox update'
+bash_case allow './sandbox update --check'
 bash_case allow 'bash -n tools/sandbox/boot.sh'
 bash_case allow 'docker ps'
 bash_case allow 'docker logs my-sandbox-1234abcd'

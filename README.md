@@ -7,8 +7,9 @@ handing it your Mac.
 curl -fsSL https://raw.githubusercontent.com/kirkstrobeck/sandbox/main/install.sh | bash
 ```
 
-Run that from the root of any git repo. It installs the harness, wires the
-hooks, and prints:
+Run that from any project root — including an empty folder. A git repo is not
+required, and the directory is created if it doesn't exist. It installs the
+harness, wires the hooks, and prints:
 
 ```
 1. edit tools/sandbox/sandbox.conf   (ports, watch dirs, volumes)
@@ -84,6 +85,7 @@ printf '%s' "$LONG_PROMPT" | ./sandbox
 | `./sandbox rebuild` | Force an image rebuild. |
 | `./sandbox stop` | Stop the container. Cache, credentials, and volumes survive. |
 | `./sandbox test` | Run the PreToolUse gate test suite. |
+| `./sandbox update` | Pull a newer harness from this repo into the project. |
 | `./sandbox help` | The same list, from the script itself. |
 
 Anything that isn't one of those verbs is treated as a message for the inner
@@ -96,11 +98,20 @@ default.
 
 ## Requirements
 
-macOS with a git repo, plus `git`, `jq`, `curl`, and `tar`.
+macOS, `jq`, and a Docker daemon. `curl` and `tar` are needed only for the
+one-line install above, which fetches a tarball; installing from a local
+checkout skips both.
 
-A Docker daemon. Colima is what this is tuned for — `boot.sh` starts it with
-`--vm-type vz --mount-type virtiofs`,
-which is what makes the bind mount fast enough to work in:
+The target does **not** have to be a git repo, and `git` does not have to be on
+the host. Install still writes a `.gitignore` covering
+`tools/sandbox/.cache/` and `tools/sandbox/sandbox.local.conf`, so if you run
+`git init` later the credentials are already excluded. Host `git` only comes up
+when you want commits from inside the container to carry your name and a `gh`
+token to push with.
+
+About the Docker daemon: Colima is what this is tuned for — `boot.sh` starts it
+with `--vm-type vz --mount-type virtiofs`, which is what makes the bind mount
+fast enough to work in:
 
 ```bash
 brew install colima docker jq
@@ -112,7 +123,8 @@ warn rather than fail.
 
 You also need a working agent login on the host — `claude` or `codex login` —
 and `gh auth login` if the inner agent should push. `./sandbox doctor` reports
-each of these and tells you the exact command to fix it.
+each of these and tells you the exact command to fix it; it only FAILs on what
+actually blocks a run, and warns about the rest.
 
 ## Configuration
 
@@ -121,7 +133,9 @@ shell, it is commented, and it is the one file in `tools/sandbox/` that an
 install will preserve rather than replace:
 
 - `SANDBOX_PROJECT` — names the container, image, and volumes.
-- `SANDBOX_PORTS` — published ports, in `HOST:CONTAINER` form.
+- `SANDBOX_PORTS` — published ports, in `HOST:CONTAINER` or `IP:HOST:CONTAINER`
+  form. The host number is a preference: if it is already taken, boot publishes
+  the next free one up and says so. The container port never moves.
 - `SANDBOX_VOLUME_DIRS` — directories that must be container-private named
   volumes instead of the bind mount. `node_modules` belongs here because the
   Mac's tree is darwin-arm64 and the container needs linux-arm64; build caches
@@ -130,8 +144,8 @@ install will preserve rather than replace:
   tight; the bridge polls.
 - `SANDBOX_DEFAULT_AGENT`, and pinned toolchain versions for the image.
 
-For anything machine-specific that must not be committed — a port already taken
-on your laptop, a different daemon socket — create
+For anything machine-specific that must not be committed — a pinned port, a
+different daemon socket — create
 `tools/sandbox/sandbox.local.conf`. It is sourced last and the installer adds it
 to `.gitignore`, along with `tools/sandbox/.cache/`, which holds live OAuth and
 GitHub tokens and must never be read out, printed, or committed.
@@ -139,6 +153,32 @@ GitHub tokens and must never be read out, printed, or committed.
 Ports, mounts, and volumes are fixed when the container is created. `./sandbox
 up` notices the drift after a config change and recreates the container; if it
 somehow doesn't, `./sandbox rebuild`.
+
+## Upgrading an installed project
+
+```bash
+./sandbox update
+```
+
+That fetches this repo at the ref the project was installed from and runs
+`install.sh` against the project again — same script, same rules, so there is
+only one definition of which files are preserved. `tools/sandbox/` and
+`./sandbox` are replaced; `sandbox.conf`, `sandbox.local.conf`, `AGENTS.md` and
+`CLAUDE.md` are kept, with the incoming defaults left beside your config as
+`sandbox.conf.new`. The hooks are re-merged into `.claude/settings.json` without
+disturbing any other hook you have, and the changed files are listed at the end.
+
+Every install writes `tools/sandbox/ORIGIN.md` — the repo, the ref, and the
+commit it came from. That is what `update` reads, so a fork is upgraded from the
+fork: `./sandbox update --repo you/sandbox --ref main` once, and the file
+remembers. `--from ../sandbox` updates from a local checkout instead of the
+network.
+
+Once a day `./sandbox up` asks GitHub whether the harness has moved, in the
+background, and prints one line if it has. Nothing is ever changed for you —
+the line just names the command. `SANDBOX_UPDATE_CHECK="0"` in `sandbox.conf`
+turns it off, and so does `SANDBOX_UPDATE_CHECK=0` in the environment.
+`./sandbox doctor` reports the same thing on demand.
 
 ## Docs
 

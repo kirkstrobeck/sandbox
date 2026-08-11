@@ -2,7 +2,13 @@
 # Check the host before anything expensive happens.
 #
 # Every failure here has one specific fix, so the check prints the fix rather
-# than the symptom. Nothing in this file changes state.
+# than the symptom. Nothing in this file changes the project — the only write is
+# the update-check stamp under .cache/, which is run state.
+#
+# FAIL is reserved for things that actually stop a run: no Docker, no jq, or
+# credentials that could leak into a commit. Everything the sandbox can start
+# without — git on the host, a git repo at all, colima, an agent login — is a
+# warn, because an empty project directory is a supported place to work.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -17,9 +23,13 @@ warn() { printf '  warn  %s\n' "$*"; }
 bad()  { printf '  FAIL  %s\n' "$*"; fails=$((fails + 1)); }
 
 echo "host"
-for tool in git jq docker; do
+for tool in jq docker; do
   command -v "$tool" >/dev/null 2>&1 && ok "$tool" || bad "$tool missing — brew install $tool"
 done
+# git on the host is only used to copy your commit identity into the container
+# and to bridge a gh token. Without it the sandbox still runs.
+command -v git >/dev/null 2>&1 && ok "git" \
+  || warn "git missing — brew install git (only needed to push from inside the sandbox)"
 command -v colima >/dev/null 2>&1 && ok "colima" \
   || warn "colima missing — brew install colima (or use another Docker daemon)"
 
@@ -48,12 +58,38 @@ else
   warn "no GitHub token — run 'gh auth login' if the inner agent needs to push"
 fi
 
-echo "repo"
-git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 && ok "git repo at $REPO_ROOT" \
-  || bad "not a git repo — run 'git init' first"
+echo "project"
+if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  ok "git repo at $REPO_ROOT"
+else
+  warn "not a git repo at $REPO_ROOT — fine; the sandbox mounts the directory either way"
+fi
+# Stays a FAIL even with no git repo. The line costs nothing now, and the day
+# someone runs 'git init' here it is the difference between a gitignored token
+# and a committed one.
 grep -qs 'tools/sandbox/.cache' "$REPO_ROOT/.gitignore" \
   && ok ".cache is gitignored" \
-  || bad ".cache is NOT gitignored — it holds credentials. Add tools/sandbox/.cache/ to .gitignore"
+  || bad ".cache is NOT gitignored — it holds credentials. Add tools/sandbox/.cache/ to $REPO_ROOT/.gitignore"
+
+echo "harness"
+# Where tools/sandbox came from, and whether it has moved since. Doctor is the
+# one place a synchronous network call is appropriate — you asked for a report —
+# so this checks now rather than reading the cached answer boot.sh uses. Never a
+# FAIL: an old harness runs fine, and so does one that cannot reach github.com.
+if [ -f "$SCRIPT_DIR/ORIGIN.md" ]; then
+  ok "installed from $(sed -n 's/^[[:space:]]*SANDBOX_ORIGIN_URL=//p' "$SCRIPT_DIR/ORIGIN.md" | head -1)"
+  update_status="$(bash "$SCRIPT_DIR/update.sh" --check 2>&1)"
+  case "$update_status" in
+    "up to date"*) ok "$update_status" ;;
+    *)             warn "$update_status" ;;
+  esac
+elif [ -f "$REPO_ROOT/install.sh" ]; then
+  # install.sh at the root: this is the sandbox repo itself, where tools/sandbox
+  # is the working copy rather than something installed. Nothing to check.
+  ok "this is the sandbox source repo — tools/sandbox is the working copy"
+else
+  warn "no tools/sandbox/ORIGIN.md — installed before it existed. './sandbox update' writes one"
+fi
 
 echo "gates"
 if [ -f "$REPO_ROOT/.claude/settings.json" ] &&
