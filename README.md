@@ -3,6 +3,16 @@
 Run your coding agent with permissions turned off, inside a container, without
 handing it your Mac.
 
+> ## ⚠️ CAUTION — USE AT YOUR OWN RISK
+>
+> Permission checks are off on purpose. The container keeps that work off your
+> Mac by default; it is **not** a hardened isolation product and it will not
+> contain an agent that is trying to get out.
+>
+> Provided **AS IS**, with no warranty of safety or fitness — see
+> [LICENSE](LICENSE). Full threat model, what crosses the boundary, and the
+> residual risks: [docs/security.md](docs/security.md).
+
 ## Quick install
 
 Open your project and give this instruction to your agent
@@ -124,7 +134,6 @@ should push. `./sandbox doctor` reports each one and prints the exact fix.
   reloads inside the container.
 - [docs/security.md](docs/security.md) — threat model, what crosses the trust
   boundary, residual risks, and keeping guardrails aligned with capability.
-  **Use at your own risk; no warranty.**
 
 ## License
 
