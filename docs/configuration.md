@@ -198,10 +198,23 @@ detail and the measured numbers behind the design are in
 
 ## `SANDBOX_DEFAULT_AGENT`
 
-Default `claude`. Used only when nothing can be auto-detected from the
-environment your outer client leaves behind. Override for a single run with
-`./sandbox -a codex "task"`, or for a shell with `SANDBOX_AGENT`. Detection
-order and why Codex is checked first: [agents.md](agents.md).
+Default `claude`. `claude`, `codex` or `cursor`. Used only when nothing can be
+auto-detected from the environment your outer client leaves behind — normally
+the inner agent matches the outer one and nothing has to be set here. Override
+for a single run with `./sandbox -a cursor "task"`, or for a shell with
+`SANDBOX_AGENT`. Detection order, and why Codex is checked first and Cursor
+last: [agents.md](agents.md).
+
+## `SANDBOX_DEFAULT_MODEL`
+
+Default empty. A project-wide pin for the inner agent's model, used only when
+the outer client's model cannot be read. `SANDBOX_MODEL` in the environment, or
+`./sandbox -m <id>` for one run, beats it.
+
+Leave it empty unless you mean it. Empty means no `--model` flag is passed and
+the inner CLI uses its own default, which is the honest answer when nothing
+readable says otherwise. The id is handed through verbatim, so it has to be one
+the chosen agent understands. Full resolution order: [agents.md](agents.md).
 
 ## Toolchain, baked into the image
 
@@ -211,12 +224,63 @@ order and why Codex is checked first: [agents.md](agents.md).
 | `SANDBOX_DOCKER_CLI_VERSION` | `27.5.1` | CLI only; the daemon is the host's. |
 | `SANDBOX_PNPM_VERSION` | `10.15.0` | |
 | `SANDBOX_CODEX_VERSION` | `latest` | `@openai/codex`. |
+| `SANDBOX_CURSOR_VERSION` | `latest` | Cursor CLI. Not on npm — a dated lab build like `2026.08.04-aaa8809`. `latest` reads the current one out of `cursor.com/install` at build time. |
 | `SANDBOX_WITH_PLAYWRIGHT` | `0` | `1` installs Chromium with deps — a large image. |
 | `SANDBOX_PLAYWRIGHT_VERSION` | `1.55.0` | Only used when the above is `1`. |
 
 Pin them — a floating toolchain is how the container and CI quietly stop
-agreeing. All six are `docker build` args, so a change needs either a
+agreeing. All seven are `docker build` args, so a change needs either a
 `SANDBOX_STACK` bump or an explicit `./sandbox rebuild`.
+
+## What an install owns: `tools/sandbox/MANIFEST`
+
+Every path an install writes is listed in `tools/sandbox/MANIFEST`, with a
+`version` header and a mode per path. It is checked in, and it is read by
+`install.sh` (what to write), `update.sh` (what to remove, and what to report as
+changed), `doctor.sh` and `./sandbox test`.
+
+| Mode | Meaning |
+| --- | --- |
+| `replace` | Copied from the source tree on every install. **Deleting the line deletes the file from the project on the next `./sandbox update`.** |
+| `preserve` | Copied only when the project does not have it. Never overwritten, never deleted. |
+| `manage` | Install touches it but does not own its contents — merged into, generated, or purely yours. Never wholesale copied, never deleted. |
+
+```
+version 2
+
+replace  tools/sandbox/dispatch-cursor.sh
+preserve tools/sandbox/sandbox.conf
+manage   tools/sandbox/.cache               # live credentials and run state
+```
+
+The point is that ownership stops being implicit. Before this, an upgrade
+deleted `tools/sandbox` and copied a new one — which worked for files inside
+that directory and quietly failed for everything outside it. A file the harness
+stopped shipping stayed in every project that had ever installed it, forever,
+and nothing reported it.
+
+The removal rule is deliberately one-directional: a path the **old** manifest
+owned as `replace` and the **new** one does not mention is deleted. A `preserve`
+or `manage` path that leaves the manifest is left exactly where it is. Dropping
+a line from a list is not consent to delete somebody's config.
+
+Two guards keep the file honest, because a manifest that lies is worse than no
+manifest — it would install a project into a state where the next update deletes
+files that were never written:
+
+- **At install time**, `install.sh` fails *before touching the project* if a
+  `replace` or `preserve` path is missing from the source tree.
+- **In the test suite**, `./sandbox test` checks both directions: every listed
+  path exists, and every file under `tools/sandbox/` is listed.
+
+`./sandbox doctor` reports the manifest version and warns if the project is
+missing a path the manifest claims.
+
+Upgrading from an install that predates the manifest is handled once: there is
+no way to tell a file still shipped from one dropped three versions ago, so
+`install.sh` sweeps `tools/sandbox/` — keeping `.cache/`, `sandbox.conf` and
+`sandbox.local.conf` — says `swept`, and lets the manifest own the directory
+from then on.
 
 ## Upgrading the harness itself
 
@@ -241,12 +305,24 @@ SANDBOX_ORIGIN_COMMIT=<sha>
 
 The update *is* `install.sh`, fetched with the tarball and run against this
 directory, so the rules are the install rules and there is no second copy of
-them to drift: `tools/sandbox` and `./sandbox` are replaced, `sandbox.conf`,
-`sandbox.local.conf`, `AGENTS.md` and `CLAUDE.md` are preserved, the incoming
-defaults land beside your config as `sandbox.conf.new`, and the PreToolUse hooks
-are re-merged into `.claude/settings.json` without touching your other hooks.
-The changed files are listed when it finishes. Run `./sandbox up` afterwards —
-a new `SANDBOX_STACK` or run-args change only takes effect on the next boot.
+them to drift: the manifest above decides what is replaced, preserved and
+removed, the incoming defaults land beside your config as `sandbox.conf.new`,
+and the PreToolUse hooks are re-merged into `.claude/settings.json` without
+touching your other hooks.
+
+The change report at the end is computed over the union of the old and new
+manifests, so a file the harness stopped shipping shows up as `removed` rather
+than just quietly vanishing:
+
+```
+Changed:
+  added    tools/sandbox/dispatch-cursor.sh
+  updated  tools/sandbox/dispatch.sh
+  removed  tools/sandbox/dropped.sh
+```
+
+Run `./sandbox up` afterwards — a new `SANDBOX_STACK` or run-args change only
+takes effect on the next boot.
 
 Running it in a clone of the sandbox repo itself is refused: there, upstream
 would overwrite the working copy. `git pull`, or `--force` if you meant it.
@@ -278,6 +354,9 @@ can override is not one.
 | Variable | Effect |
 | --- | --- |
 | `SANDBOX_AGENT` | Inner agent for this invocation. Beats detection and the default. |
+| `SANDBOX_MODEL` | Inner model for this invocation. Beats detection and `SANDBOX_DEFAULT_MODEL`. What `./sandbox -m` sets. |
+| `ANTHROPIC_MODEL` / `CODEX_MODEL` / `CURSOR_MODEL` | Read as the outer client's model when `SANDBOX_MODEL` is unset. |
+| `CURSOR_API_KEY` | Bridged to the inner Cursor CLI ahead of any stored login. |
 | `SANDBOX_REBUILD=1` | Forces an image rebuild. What `./sandbox rebuild` sets. |
 | `SANDBOX_PORT_SCAN_LIMIT` | How far above a busy host port to look for a free one. Default `20`. |
 | `SANDBOX_UPDATE_CHECK=0` | Silences the daily "a newer harness exists" check for this shell. |

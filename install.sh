@@ -14,6 +14,12 @@
 # This is also the upgrade path: `./sandbox update` in an installed project
 # fetches the current tarball and runs this script against the project again.
 # There is one set of rules about which files are preserved, and it lives here.
+#
+# WHAT GETS WRITTEN is not decided in this file. tools/sandbox/MANIFEST lists
+# every path an install owns and what mode it is in, and this script applies it.
+# The manifest already in the project is read first, so a path that used to be
+# `replace` and is gone from the incoming manifest gets deleted rather than
+# lingering in every project that ever installed it.
 
 set -euo pipefail
 
@@ -25,6 +31,7 @@ say()  { printf '%s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 kept() { printf '  kept     %s\n' "$1" >&2; }
 put()  { printf '  wrote    %s\n' "$1" >&2; }
+gone() { printf '  removed  %s\n' "$1" >&2; }
 
 # jq is the only unconditional requirement — it merges the PreToolUse hooks into
 # .claude/settings.json. curl and tar are checked below, and only when this
@@ -63,70 +70,107 @@ trap '[ -n "$CLEANUP" ] && rm -rf "$CLEANUP"' EXIT
 had_harness=""
 [ -d "$TARGET/tools/sandbox" ] && had_harness=1
 
-say "Installing the sandbox into $TARGET"
+# --- the manifest -----------------------------------------------------------
+NEW_MANIFEST="$SRC/tools/sandbox/MANIFEST"
+[ -r "$NEW_MANIFEST" ] || die "the source tree has no tools/sandbox/MANIFEST"
+# shellcheck source=tools/sandbox/manifest.sh
+. "$SRC/tools/sandbox/manifest.sh"
 
-# --- the harness: always replaced ------------------------------------------
-# sandbox.conf is the one file in here a project owns, so it is preserved and
-# the new default is left beside it for comparison.
-conf_backup=""
+# Fail before touching the project, not halfway through it. A manifest that
+# promises a file the tarball does not carry would install a project into a
+# state where the next update deletes files that were never written.
+if ! missing="$(manifest_missing_sources "$SRC" "$NEW_MANIFEST")"; then
+  die "MANIFEST lists paths that are not in $SRC:
+$(printf '       %s\n' $missing)"
+fi
+
+# Read the project's current manifest before anything overwrites it: it is the
+# only record of what the last install put here.
+OLD_MANIFEST=""
+if [ -f "$TARGET/tools/sandbox/MANIFEST" ]; then
+  OLD_MANIFEST="$(mktemp)"
+  cp "$TARGET/tools/sandbox/MANIFEST" "$OLD_MANIFEST"
+fi
+
+say "Installing the sandbox into $TARGET (manifest v$(manifest_version "$NEW_MANIFEST"))"
+
+# --- installs that predate the manifest -------------------------------------
+# Those projects have a tools/sandbox full of files nothing can enumerate, so
+# there is no way to tell a file this harness still ships from one it dropped
+# three versions ago. Sweep the directory once — everything except the three
+# things that are the project's, not ours — and let the manifest own it after.
+if [ -n "$had_harness" ] && [ -z "$OLD_MANIFEST" ]; then
+  find "$TARGET/tools/sandbox" -mindepth 1 -maxdepth 1 \
+    ! -name '.cache' ! -name 'sandbox.conf' ! -name 'sandbox.local.conf' \
+    -exec rm -rf {} + 2>/dev/null || true
+  say "  swept    tools/sandbox/ (pre-manifest install; .cache and your conf kept)"
+fi
+
+# --- apply the manifest -----------------------------------------------------
+install_path() {
+  local mode="$1" rel="$2"
+  case "$mode" in
+    replace)
+      mkdir -p "$(dirname "$TARGET/$rel")"
+      cp "$SRC/$rel" "$TARGET/$rel"
+      case "$rel" in *.sh|sandbox) chmod +x "$TARGET/$rel" ;; esac
+      put "$rel"
+      ;;
+    preserve)
+      if [ -e "$TARGET/$rel" ]; then
+        kept "$rel"
+        return 0
+      fi
+      mkdir -p "$(dirname "$TARGET/$rel")"
+      cp "$SRC/$rel" "$TARGET/$rel"
+      put "$rel"
+      ;;
+    # manage: merged, generated, or the project's own. Handled elsewhere in this
+    # script, or not at all. Listed in the manifest so the footprint is honest.
+    manage) : ;;
+  esac
+}
+
+# sandbox.conf is preserved like the rest, but it is also the file people are
+# most likely to want to diff after an upgrade, so the incoming defaults land
+# beside it.
 if [ -f "$TARGET/tools/sandbox/sandbox.conf" ]; then
-  conf_backup="$(mktemp)"
-  cp "$TARGET/tools/sandbox/sandbox.conf" "$conf_backup"
-fi
-# sandbox.local.conf is gitignored, so a tarball never carries one — but it is
-# still under the directory about to be deleted, and losing a pinned port on
-# every upgrade is not acceptable.
-local_backup=""
-if [ -f "$TARGET/tools/sandbox/sandbox.local.conf" ]; then
-  local_backup="$(mktemp)"
-  cp "$TARGET/tools/sandbox/sandbox.local.conf" "$local_backup"
+  mkdir -p "$TARGET/tools/sandbox"
+  cp "$SRC/tools/sandbox/sandbox.conf" "$TARGET/tools/sandbox/sandbox.conf.new"
+  say "  wrote    tools/sandbox/sandbox.conf.new (incoming defaults)"
 fi
 
-# The cache is inside the directory about to be deleted, and it is not
-# disposable: it holds the bridged credentials and the inner agent's run state,
-# so wiping it on an upgrade costs a re-login and every `-c` thread. Moved
-# aside within the same filesystem rather than copied — these are live tokens
-# and they should not be duplicated through /tmp.
-cache_backup=""
-if [ -d "$TARGET/tools/sandbox/.cache" ]; then
-  cache_backup="$TARGET/tools/.sandbox-cache-$$"
-  rm -rf "$cache_backup"
-  mv "$TARGET/tools/sandbox/.cache" "$cache_backup"
-fi
+while read -r mode rel; do
+  [ -n "$rel" ] || continue
+  install_path "$mode" "$rel"
+done <<EOF
+$(manifest_entries "$NEW_MANIFEST")
+EOF
 
-mkdir -p "$TARGET/tools"
-rm -rf "$TARGET/tools/sandbox"
-cp -R "$SRC/tools/sandbox" "$TARGET/tools/sandbox"
-# Any .cache that came in with the source belongs to whoever ran the install,
-# not to this project.
-rm -rf "$TARGET/tools/sandbox/.cache"
-if [ -n "$cache_backup" ]; then
-  mv "$cache_backup" "$TARGET/tools/sandbox/.cache"
+# --- remove what this harness stopped shipping ------------------------------
+# The rule, and the only rule: a path the last install owned outright and this
+# one does not mention is deleted. A `preserve` or `manage` path that leaves the
+# manifest is left exactly where it is — those are the project's files, and
+# dropping a line from a list is not consent to delete somebody's config.
+if [ -n "$OLD_MANIFEST" ]; then
+  new_paths="$(manifest_paths "$NEW_MANIFEST")"
+  for rel in $(manifest_paths "$OLD_MANIFEST" replace); do
+    printf '%s\n' "$new_paths" | grep -qxF "$rel" && continue
+    [ -e "$TARGET/$rel" ] || continue
+    rm -rf "$TARGET/$rel"
+    gone "$rel"
+  done
+fi
+[ -n "$OLD_MANIFEST" ] && rm -f "$OLD_MANIFEST"
+
+# Neither of these is ever copied, swept or removed — they are `manage` paths.
+# Saying so out loud is the point: an upgrade that silently keeps your
+# credentials is indistinguishable from one that silently lost them.
+[ -d "$TARGET/tools/sandbox/.cache" ] &&
   kept "tools/sandbox/.cache/ (credentials and run state)"
-fi
-# Installing from a local checkout copies that checkout's working tree, which
-# may include the installer's own machine-local overrides. Whoever is installing
-# does not want their ports in someone else's project.
-rm -f "$TARGET/tools/sandbox/sandbox.local.conf"
-chmod +x "$TARGET"/tools/sandbox/*.sh
-put "tools/sandbox/"
-
-if [ -n "$conf_backup" ]; then
-  cp "$TARGET/tools/sandbox/sandbox.conf" "$TARGET/tools/sandbox/sandbox.conf.new"
-  cp "$conf_backup" "$TARGET/tools/sandbox/sandbox.conf"
-  rm -f "$conf_backup"
-  kept "tools/sandbox/sandbox.conf (new defaults in sandbox.conf.new)"
-fi
-
-if [ -n "$local_backup" ]; then
-  cp "$local_backup" "$TARGET/tools/sandbox/sandbox.local.conf"
-  rm -f "$local_backup"
+[ -f "$TARGET/tools/sandbox/sandbox.local.conf" ] &&
   kept "tools/sandbox/sandbox.local.conf"
-fi
-
-cp "$SRC/sandbox" "$TARGET/sandbox"
-chmod +x "$TARGET/sandbox"
-put "sandbox"
+:
 
 # --- where this came from ---------------------------------------------------
 # Six months from now, tools/sandbox is a directory of shell scripts nobody in
@@ -164,6 +208,10 @@ The exception is tools/sandbox/sandbox.conf — that file is the project's, and
 every install and update preserves it, leaving the incoming defaults beside it
 as sandbox.conf.new. AGENTS.md and CLAUDE.md are kept the same way.
 
+tools/sandbox/MANIFEST is the full list: every path an install owns, and whether
+it is replaced, preserved, or only managed. It is also what an upgrade reads to
+find files this harness used to ship and no longer does.
+
 To pull a newer harness into this project:
 
     ./sandbox update
@@ -182,28 +230,6 @@ Keep them if you edit this file; delete the file and update falls back to
 kirkstrobeck/sandbox@main.
 EOF
 put "tools/sandbox/ORIGIN.md"
-
-# --- agent instructions: yours once they exist ------------------------------
-copy_once() {
-  local rel="$1"
-  if [ -e "$TARGET/$rel" ]; then
-    kept "$rel"
-    return 0
-  fi
-  mkdir -p "$(dirname "$TARGET/$rel")"
-  cp "$SRC/$rel" "$TARGET/$rel"
-  put "$rel"
-}
-
-copy_once AGENTS.md
-copy_once CLAUDE.md
-copy_once .cursor/rules/sandbox.mdc
-
-# The skill is reference documentation for the harness, not project prose, so it
-# tracks the harness version rather than being preserved.
-mkdir -p "$TARGET/.claude/skills/sandbox"
-cp "$SRC/.claude/skills/sandbox/SKILL.md" "$TARGET/.claude/skills/sandbox/SKILL.md"
-put ".claude/skills/sandbox/SKILL.md"
 
 # --- hooks: merged, never clobbered -----------------------------------------
 # Any PreToolUse entry pointing at our gates is dropped and re-added, so a

@@ -17,12 +17,26 @@ fi
 
 # Inner's user-global instructions come from the baked-in rules, so it does the
 # work directly instead of recursively dispatching back into its own sandbox.
-# Both filenames are seeded because either agent may be the one running.
-mkdir -p /home/agent/.claude /home/agent/.codex
+# Every agent's filename is seeded, because any of the three may be the one
+# running and none of them reads the others' conventions.
+#
+# This matters more than it looks: the project's own AGENTS.md says "you are the
+# OUTER agent, dispatch everything". An inner agent that reads only that file
+# would dutifully try to dispatch to itself. The user-global copy is what
+# outranks it.
+mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules
 if [ -f /etc/sandbox-agent.md ]; then
   cp -f /etc/sandbox-agent.md /home/agent/.claude/CLAUDE.md 2>/dev/null || true
   cp -f /etc/sandbox-agent.md /home/agent/.codex/AGENTS.md 2>/dev/null || true
-  chown agent:"$(id -g agent)" /home/agent/.claude/CLAUDE.md /home/agent/.codex/AGENTS.md 2>/dev/null || true
+  # Cursor's user-global equivalent is a rule with alwaysApply, so the same text
+  # gets the frontmatter that makes it always apply.
+  {
+    printf -- '---\ndescription: You are the inner agent inside the sandbox container.\nalwaysApply: true\n---\n\n'
+    cat /etc/sandbox-agent.md
+  } >/home/agent/.cursor/rules/sandbox-inner.mdc 2>/dev/null || true
+  chown -R agent:"$(id -g agent)" \
+    /home/agent/.claude/CLAUDE.md /home/agent/.codex/AGENTS.md \
+    /home/agent/.cursor 2>/dev/null || true
 fi
 
 as_agent() { gosu agent env HOME=/home/agent "$@"; }

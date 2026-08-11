@@ -3,6 +3,8 @@
 #
 #   ./sandbox "add a health check endpoint"   send work to the inner agent
 #   ./sandbox -c "now add a test for it"      continue the same thread
+#   ./sandbox -a claude|codex|cursor "task"   pick the inner agent for one run
+#   ./sandbox -m <model-id> "task"            pick the inner model for one run
 #   ./sandbox result                          re-read the last answer
 #   ./sandbox tail -f                         watch the inner agent work
 #   ./sandbox up                              start the container

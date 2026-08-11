@@ -7,6 +7,8 @@
 #
 #   bash tools/sandbox/dispatch.sh "run the test suite"
 #   bash tools/sandbox/dispatch.sh --continue "now fix the failure"
+#   bash tools/sandbox/dispatch.sh --agent cursor "run the test suite"
+#   bash tools/sandbox/dispatch.sh --model gpt-5 "run the test suite"
 #   bash tools/sandbox/dispatch.sh --result        # re-read the last answer
 #   echo "$LONG_PROMPT" | bash tools/sandbox/dispatch.sh
 #
@@ -19,16 +21,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/common.sh"
 # shellcheck source=agent.sh
 . "$SCRIPT_DIR/agent.sh"
+# shellcheck source=model.sh
+. "$SCRIPT_DIR/model.sh"
 # shellcheck source=dispatch-claude.sh
 . "$SCRIPT_DIR/dispatch-claude.sh"
 # shellcheck source=dispatch-codex.sh
 . "$SCRIPT_DIR/dispatch-codex.sh"
+# shellcheck source=dispatch-cursor.sh
+. "$SCRIPT_DIR/dispatch-cursor.sh"
 
 RUN_DIR="$CACHE_DIR/run"
 RUN_DIR_CTR="/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/.cache/run"
 
 usage() {
-  sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit "${1:-0}"
 }
 
@@ -40,6 +46,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -c|--continue) continue_flag="--continue"; shift ;;
     -a|--agent) SANDBOX_AGENT="${2:-}"; shift 2 ;;
+    -m|--model) SANDBOX_MODEL="${2:-}"; shift 2 ;;
     --result) want_result=1; shift ;;
     -h|--help) usage 0 ;;
     --) shift; message="$*"; break ;;
@@ -63,6 +70,11 @@ if [ "$want_result" = 1 ]; then
       [ -f "$RUN_DIR/last.txt" ] || { echo "No previous Codex result." >&2; exit 1; }
       cat "$RUN_DIR/last.txt"
       exit 0 ;;
+    cursor)
+      [ -f "$RUN_DIR/last.jsonl" ] || { echo "No previous Cursor result." >&2; exit 1; }
+      cursor_result_from_log "$RUN_DIR/last.jsonl"
+      printf '\n'
+      exit 0 ;;
   esac
 fi
 
@@ -78,6 +90,11 @@ fi
 
 require_agent_credential "$agent" || exit 1
 
+# Same product, same model. Empty means nothing could be read, and no --model
+# flag is passed — the inner CLI uses its own default rather than one we made up.
+SANDBOX_INNER_MODEL="$(resolve_sandbox_model "$agent")"
+export SANDBOX_INNER_MODEL
+
 container="$(bash "$SCRIPT_DIR/boot.sh")" || {
   echo "Sandbox failed to start. See the errors above." >&2
   exit 1
@@ -88,9 +105,10 @@ mkdir -p "$RUN_DIR"
 printf '%s' "$message" >"$RUN_DIR/msg"
 rm -f "$RUN_DIR/last.json" "$RUN_DIR/last.txt" "$RUN_DIR/last.jsonl"
 
-echo "→ $agent (inner) ..." >&2
+echo "→ $agent (inner)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} ..." >&2
 
 case "$agent" in
   claude) dispatch_claude "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
   codex)  dispatch_codex  "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  cursor) dispatch_cursor "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
 esac

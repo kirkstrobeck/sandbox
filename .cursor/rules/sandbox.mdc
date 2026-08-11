@@ -14,6 +14,9 @@ host, and do not edit project files directly. Relay the work:
 
 Full rules: `AGENTS.md` at the repo root.
 
+A dispatch from here runs Cursor inside the container too — same product, same
+model — so `./sandbox "task"` needs no extra flags.
+
 Cursor does not enforce this the way Claude Code does — the PreToolUse hooks in
 `.claude/settings.json` are a Claude Code feature and they do not run here. In
 Cursor the boundary is only as good as this rule, so hold it deliberately: when

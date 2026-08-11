@@ -16,6 +16,7 @@ sandbox_mount_args() {
     -v "$REPO_ROOT:$REPO_ROOT" \
     -v "$CACHE_DIR/claude-home:/home/agent/.claude" \
     -v "$CACHE_DIR/codex-home:/home/agent/.codex" \
+    -v "$CACHE_DIR/cursor-home:/home/agent/.config/cursor" \
     -v "$CACHE_DIR/gh:/home/agent/.config/gh" \
     -v "$CACHE_DIR/claude.json:/home/agent/.claude.json"
 

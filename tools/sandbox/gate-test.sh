@@ -66,6 +66,8 @@ bash_case allow 'bash tools/sandbox/dispatch.sh "fix the header"'
 bash_case allow 'bash tools/sandbox/boot.sh'
 bash_case allow './sandbox "fix the header"'
 bash_case allow './sandbox -c "now add a test"'
+bash_case allow './sandbox -a cursor "fix the header"'
+bash_case allow './sandbox -m gpt-5 "fix the header"'
 bash_case allow './sandbox run pnpm test'
 bash_case allow './sandbox status'
 # The deliberate exception: `update` writes to tools/sandbox on the host. It is
@@ -141,6 +143,47 @@ inner="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
   'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"git push\"}}" | bash "$0"' \
   "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
 check "bash: git push (SANDBOX_INNER=1)" allow "$(decision_of "$inner")"
+
+echo
+echo "Manifest — every path install claims to own is really here"
+# The gates are not the only thing that fails silently. A MANIFEST that lists a
+# file the tree does not have installs a project into a state where the next
+# update deletes files that were never written, and nothing notices until
+# somebody's harness is missing a script. This is the cheapest possible guard:
+# run it wherever the tests run.
+# shellcheck source=manifest.sh
+. "$SCRIPT_DIR/manifest.sh"
+MANIFEST_FILE="$SCRIPT_DIR/MANIFEST"
+
+if [ ! -r "$MANIFEST_FILE" ]; then
+  check "manifest: tools/sandbox/MANIFEST exists" present missing
+else
+  check "manifest: tools/sandbox/MANIFEST exists" present present
+  missing_paths="$(manifest_missing_sources "$PROJECT_ROOT" "$MANIFEST_FILE" || true)"
+  if [ -z "$missing_paths" ]; then
+    check "manifest: every replace/preserve path is in the tree" complete complete
+  else
+    check "manifest: every replace/preserve path is in the tree" complete "missing $(printf '%s ' $missing_paths)"
+  fi
+
+  # The other direction. A harness file nobody listed is a file no install
+  # copies and no update removes — it exists here and nowhere else.
+  unlisted=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    manifest_entries "$MANIFEST_FILE" | awk -v p="$f" '$2 == p { found = 1 } END { exit !found }' ||
+      unlisted="$unlisted $f"
+  done <<EOF
+$(cd "$PROJECT_ROOT" && find tools/sandbox -type f \
+    ! -path 'tools/sandbox/.cache/*' \
+    ! -name 'sandbox.local.conf' ! -name 'sandbox.conf.new' ! -name 'ORIGIN.md' 2>/dev/null | sort)
+EOF
+  if [ -z "$unlisted" ]; then
+    check "manifest: no harness file is missing from it" complete complete
+  else
+    check "manifest: no harness file is missing from it" complete "unlisted$unlisted"
+  fi
+fi
 
 echo
 printf '%s passed, %s failed\n' "$pass" "$fail"

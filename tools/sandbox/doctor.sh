@@ -52,6 +52,15 @@ else
 fi
 [ -f "$HOME/.codex/auth.json" ] && ok "Codex (~/.codex/auth.json)" \
   || warn "no Codex credential — run 'codex login' on the Mac"
+if [ -n "${CURSOR_API_KEY:-}" ]; then
+  ok "Cursor (CURSOR_API_KEY in the environment)"
+elif security find-generic-password -s "cursor-access-token" -a "cursor-user" -w >/dev/null 2>&1; then
+  ok "Cursor (macOS Keychain)"
+elif [ -f "$HOME/.cursor/auth.json" ]; then
+  ok "Cursor (~/.cursor/auth.json)"
+else
+  warn "no Cursor credential — run 'agent login' on the Mac, or export CURSOR_API_KEY"
+fi
 if [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ] || gh auth token >/dev/null 2>&1; then
   ok "GitHub token available (git push will work inside the sandbox)"
 else
@@ -72,6 +81,22 @@ grep -qs 'tools/sandbox/.cache' "$REPO_ROOT/.gitignore" \
   || bad ".cache is NOT gitignored — it holds credentials. Add tools/sandbox/.cache/ to $REPO_ROOT/.gitignore"
 
 echo "harness"
+# The manifest is what an upgrade deletes by. A `replace` path it claims but the
+# project does not have means the last install was interrupted or somebody
+# removed a harness file by hand, and either way the next update's change report
+# will be wrong about it. Warn, never fail: the sandbox still runs.
+if [ -r "$SCRIPT_DIR/MANIFEST" ]; then
+  # shellcheck source=manifest.sh
+  . "$SCRIPT_DIR/manifest.sh"
+  if absent="$(manifest_missing_sources "$REPO_ROOT" "$SCRIPT_DIR/MANIFEST")"; then
+    ok "manifest v$(manifest_version "$SCRIPT_DIR/MANIFEST") — every owned path is present"
+  else
+    warn "manifest lists paths this project does not have — re-run './sandbox update':"
+    printf '        %s\n' $absent
+  fi
+else
+  warn "no tools/sandbox/MANIFEST — installed before it existed. './sandbox update' writes one"
+fi
 # Where tools/sandbox came from, and whether it has moved since. Doctor is the
 # one place a synchronous network call is appropriate — you asked for a report —
 # so this checks now rather than reading the cached answer boot.sh uses. Never a

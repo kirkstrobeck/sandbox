@@ -26,6 +26,8 @@ UPDATE_CHECK_ENV="${SANDBOX_UPDATE_CHECK:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
+# shellcheck source=manifest.sh
+. "$SCRIPT_DIR/manifest.sh"
 
 ORIGIN_FILE="$SCRIPT_DIR/ORIGIN.md"
 STAMP="$CACHE_DIR/update-check"
@@ -157,15 +159,33 @@ cmd_nudge() {
   return 0
 }
 
-# tools/sandbox plus the two files install.sh writes outside it. ORIGIN.md is
-# skipped because its timestamp changes on every run and would report itself as
-# the only change; .cache is skipped because it is credentials and run state.
-manifest() {
+# What to hash before and after, so the change report is about the paths the
+# install actually owns rather than whatever happened to be under three
+# hardcoded roots. The union of the old and new manifests is the right set: a
+# path only the old one has is exactly the file about to be removed, and hashing
+# the union at both ends is what makes "removed" appear in the report instead of
+# the file just quietly vanishing.
+#
+# ORIGIN.md is excluded — its timestamp changes on every run and it would report
+# itself as the only change. .cache never appears because it is `manage`.
+changed_paths() {
+  local old="$REPO_ROOT/tools/sandbox/MANIFEST" new="$1/tools/sandbox/MANIFEST"
+  { manifest_paths "$old" replace
+    manifest_paths "$old" preserve
+    manifest_paths "$new" replace
+    manifest_paths "$new" preserve
+  } 2>/dev/null | sort -u | grep -v '^tools/sandbox/ORIGIN\.md$'
+}
+
+# "<sha>  <path>" for every path in the set that currently exists. A path that
+# is absent simply produces no line, which is what lets the awk diff below call
+# it added or removed.
+hash_paths() {
   ( cd "$REPO_ROOT" 2>/dev/null || exit 0
-    find tools/sandbox sandbox .claude/skills/sandbox -type f \
-      ! -path 'tools/sandbox/.cache/*' \
-      ! -name 'ORIGIN.md' -print 2>/dev/null |
-      sort | tr '\n' '\0' | xargs -0 shasum 2>/dev/null )
+    while IFS= read -r p; do
+      [ -n "$p" ] && [ -f "$p" ] || continue
+      shasum "$p" 2>/dev/null
+    done )
 }
 
 report_changes() {
@@ -227,15 +247,19 @@ cmd_update() {
   log "  from $REPO@$REF${FROM:+ (local checkout $src)}"
   log ""
 
-  local before after
-  before="$(mktemp)"; after="$(mktemp)"
-  manifest >"$before"
+  local before after paths
+  before="$(mktemp)"; after="$(mktemp)"; paths="$(mktemp)"
+  # Computed once, from the two manifests as they are right now — the "after"
+  # pass has to look at the same set of paths or a removal reads as a no-op.
+  changed_paths "$src" >"$paths"
+  hash_paths <"$paths" >"$before"
 
   SANDBOX_REPO="$REPO" SANDBOX_REF="$REF" SANDBOX_TARGET="$REPO_ROOT" \
     SANDBOX_ORIGIN_COMMIT="$commit" \
     bash "$src/install.sh" || die "install.sh failed; nothing further was changed"
 
-  manifest >"$after"
+  hash_paths <"$paths" >"$after"
+  rm -f "$paths"
   log ""
   log "Changed:"
   report_changes "$before" "$after"

@@ -44,8 +44,10 @@ run to discover it was wrong.
 down: `colima start --vm-type vz --mount-type virtiofs`.
 
 **Dispatch returns a login or auth error.** The credential expired on the Mac.
-The human runs `claude` (or `codex login`) on the host and signs in; the next
-dispatch re-bridges it. You cannot sign in for them.
+The human runs `claude`, `codex login`, or `agent login` on the host and signs
+in; the next dispatch re-bridges it. You cannot sign in for them. For Cursor
+specifically, a login-only credential cannot refresh inside the container —
+`CURSOR_API_KEY` is the fix if it keeps happening.
 
 **`git push` fails inside the container.** The GitHub token didn't bridge. The
 human runs `gh auth login` on the Mac, then `./sandbox up` re-syncs it. No SSH
@@ -67,22 +69,29 @@ written for this project — `tools/sandbox/ORIGIN.md` records the repo, ref and
 commit. A fix you make in there is overwritten by the next upgrade, so it
 belongs upstream.
 
-`./sandbox update` fetches that repo and reruns its `install.sh` here:
-`tools/sandbox` and `./sandbox` are replaced, `sandbox.conf`,
-`sandbox.local.conf`, `AGENTS.md` and `CLAUDE.md` are kept, hooks are re-merged,
-and the changed files are printed. It is the one CLI verb that writes to the
-project on the host, so run it when the human asks for it — not on your own
-initiative — and follow it with `./sandbox up`.
+`./sandbox update` fetches that repo and reruns its `install.sh` here.
+`tools/sandbox/MANIFEST` is the list of paths an install owns: `replace` paths
+are overwritten and are deleted if the new harness dropped them, `preserve`
+paths (`sandbox.conf`, `AGENTS.md`, `CLAUDE.md`) are kept, `manage` paths
+(`.cache/`, `sandbox.local.conf`, merged files) are never touched. Hooks are
+re-merged and the added/updated/removed files are printed. It is the one CLI
+verb that writes to the project on the host, so run it when the human asks for
+it — not on your own initiative — and follow it with `./sandbox up`.
 
 `./sandbox up` may print a line saying a newer harness exists. That is a
 once-a-day background check, and it changes nothing by itself.
 
-## Choosing the inner agent
+## Choosing the inner agent and model
 
-Auto-detected from your own environment: a Codex outer runs Codex inner, a
-Claude outer runs Claude inner. Override per dispatch with
-`./sandbox -a codex "task"`, or permanently with `SANDBOX_DEFAULT_AGENT` in
-`tools/sandbox/sandbox.conf`.
+The inner agent is the same product as the outer one, auto-detected from your
+own environment: Codex outer → Codex inner, Claude → Claude, Cursor → Cursor.
+Override per dispatch with `./sandbox -a cursor "task"`, or permanently with
+`SANDBOX_DEFAULT_AGENT` in `tools/sandbox/sandbox.conf`.
+
+The model follows the same rule where it can be read — `SANDBOX_MODEL`, else the
+outer client's own setting, else `SANDBOX_DEFAULT_MODEL`. If none of those says
+anything, no `--model` flag is passed and the inner CLI uses its default.
+`./sandbox -m <id>` sets it for one run.
 
 ## Never
 

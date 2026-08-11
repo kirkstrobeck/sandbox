@@ -21,10 +21,12 @@ dispatch_claude() {
     -e "MSG_FILE=$run_dir_ctr/msg" \
     -e "OUT_FILE=$run_dir_ctr/last.json" \
     -e "CONT_FLAG=$continue_flag" \
+    -e "SANDBOX_INNER_MODEL=${SANDBOX_INNER_MODEL:-}" \
     "$SANDBOX_NAME" bash -lc '
       msg="$(cat "$MSG_FILE")"
-      claude -p $CONT_FLAG --dangerously-skip-permissions \
-        --output-format json "$msg" >"$OUT_FILE" 2>&1
+      set -- -p $CONT_FLAG --dangerously-skip-permissions --output-format json
+      [ -n "$SANDBOX_INNER_MODEL" ] && set -- "$@" --model "$SANDBOX_INNER_MODEL"
+      claude "$@" "$msg" >"$OUT_FILE" 2>&1
     ' </dev/null || true
 
   # Push before reading: the run may have refreshed the OAuth token, and the

@@ -4,22 +4,24 @@ The inner agent runs with permissions disabled, so what it can reach is decided
 entirely by what gets mounted into the container. This is the list, how each one
 arrives, and what is deliberately left out.
 
-Three credentials cross the boundary, all of them into
+Four credentials cross the boundary, all of them into
 `tools/sandbox/.cache/`, which is mounted into the container's home:
 
 | What | Host source | Cache path | Mounted at |
 | --- | --- | --- | --- |
 | Claude Code OAuth | macOS Keychain, or `~/.claude/.credentials.json` | `.cache/claude-home/.credentials.json` | `/home/agent/.claude` |
 | Codex auth | `~/.codex/auth.json` | `.cache/codex-home/auth.json` | `/home/agent/.codex` |
+| Cursor auth | `CURSOR_API_KEY`, macOS Keychain, or `~/.cursor/auth.json` | `.cache/cursor-home/auth.json` | `/home/agent/.config/cursor` |
 | GitHub token | `gh auth token`, `GH_TOKEN`, or `GITHUB_TOKEN` | `.cache/gh/hosts.yml` | `/home/agent/.config/gh` |
 
-`boot.sh` refreshes all three in `prepare_cache` before the container starts, so
+`boot.sh` refreshes all four in `prepare_cache` before the container starts, so
 every dispatch runs against current credentials.
 
 ## `.cache/` holds live credentials
 
 Say it plainly: `tools/sandbox/.cache/` contains a live Anthropic OAuth token, a
-live OpenAI token, and a GitHub token that can push to your repos.
+live OpenAI token, a live Cursor token or API key, and a GitHub token that can
+push to your repos.
 
 - The installer adds `tools/sandbox/.cache/` to `.gitignore`, and
   `./sandbox doctor` fails — not warns — if that line is missing.
@@ -102,10 +104,54 @@ timestamps mean nothing refreshed, and copying anyway just churns the host file.
 With no credential anywhere it fails with: *Run `codex login` on the Mac, then
 re-run boot.*
 
-The two agents' credentials live in **separate cache homes** — `claude-home` and
-`codex-home` — on purpose. One shared home would put an OpenAI token and an
-Anthropic token in the same directory, and every mount that needed one would
-carry both.
+The agents' credentials live in **separate cache homes** — `claude-home`,
+`codex-home`, `cursor-home` — on purpose. One shared home would put an OpenAI
+token, an Anthropic token and a Cursor token in the same directory, and every
+mount that needed one would carry all three.
+
+## Cursor: `cursor-token-sync.sh`, and why it is pull-only
+
+`tools/sandbox/cursor-token-sync.sh pull|status`.
+
+This is the one agent bridge that does not travel back, and the reason is a
+property of the CLI rather than an omission. The Cursor CLI's refresh path
+re-runs `loginWithApiKey(apiKey)`: the durable secret is the **API key**, and an
+API key does not rotate. Nothing the container does can invalidate what the Mac
+holds, so there is nothing to push back — and not writing three rotated secrets
+into somebody's login Keychain after every dispatch is the better trade. `push`
+exists as an explicit no-op so a caller that treats all three bridges alike does
+not fail on this one.
+
+The consequence is worth stating plainly: **a login-only credential (no API key)
+bridges an access token the container cannot refresh on its own.** It works
+until that token expires, then a dispatch comes back with an auth error and
+`agent login` on the Mac fixes it. For a sandbox that runs unattended, set
+`CURSOR_API_KEY` — that is also why the API key is read first.
+
+Host side, in order:
+
+1. `CURSOR_API_KEY` in the environment.
+2. The macOS login Keychain: account `cursor-user`, services
+   `cursor-api-key`, `cursor-access-token`, `cursor-refresh-token`.
+3. The host file, if the CLI was told to use the file store there
+   (`AGENT_CLI_CREDENTIAL_STORE=file`): `~/.cursor/auth.json` on macOS,
+   `$XDG_CONFIG_HOME/cursor/auth.json` on Linux. The whole blob is passed
+   through rather than rebuilt, so a field this script has never heard of — a
+   Bedrock credential, say — survives the trip.
+
+Container side is always a file. The CLI picks its store by platform: macOS uses
+the Keychain, Linux uses `$XDG_CONFIG_HOME/cursor/auth.json`, which is why the
+cache is mounted at `/home/agent/.config/cursor` and not at `~/.cursor`.
+
+Writes go through `mktemp` + `chmod 600` + `mv` into a `chmod 700` directory,
+like the other two. `status` prints which *fields* each side has and never a
+value:
+
+```
+host  credential: apiKey
+cache credential: apiKey
+cache path:       tools/sandbox/.cache/cursor-home/auth.json
+```
 
 ## GitHub: `github-token-sync.sh`
 
@@ -161,14 +207,16 @@ If the inner agent should not be able to push at all, do not bridge a token:
 ## Checking and fixing
 
 ```bash
-./sandbox doctor                                   # all three, plus the fix for each
+./sandbox doctor                                   # all four, plus the fix for each
 bash tools/sandbox/token-sync.sh status            # Claude: host vs cache expiresAt
 bash tools/sandbox/codex-token-sync.sh status      # Codex: host vs cache last_refresh
+bash tools/sandbox/cursor-token-sync.sh status     # Cursor: which fields each side has
 ```
 
 | Symptom | Fix |
 | --- | --- |
-| Dispatch returns a login or auth error | Run `claude`, or `codex login`, on the Mac and sign in. The next dispatch re-bridges it. |
+| Dispatch returns a login or auth error | Run `claude`, `codex login`, or `agent login`, on the Mac and sign in. The next dispatch re-bridges it. |
+| Cursor auth expires mid-run, repeatedly | The bridged credential is login-only and cannot refresh in the container. Export `CURSOR_API_KEY` instead. |
 | `git push` fails inside the container | `gh auth login` on the Mac, then `./sandbox up` re-syncs the token. |
 | Logged out on the Mac after a long run | The push-back did not land. `token-sync.sh status` shows which side is newer; signing in on the Mac is always safe. |
 | `doctor` fails on `.cache is NOT gitignored` | Add `tools/sandbox/.cache/` to `.gitignore` before anything else. |

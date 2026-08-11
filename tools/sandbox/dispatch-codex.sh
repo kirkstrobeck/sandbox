@@ -21,12 +21,15 @@ dispatch_codex() {
     -e "OUT_FILE=$run_dir_ctr/last.txt" \
     -e "LOG_FILE=$run_dir_ctr/last.jsonl" \
     -e "THREAD_ID=$thread_id" \
+    -e "SANDBOX_INNER_MODEL=${SANDBOX_INNER_MODEL:-}" \
     "$SANDBOX_NAME" bash -lc '
       msg="$(cat "$MSG_FILE")"
       set -- exec
       [ -n "$THREAD_ID" ] && set -- "$@" resume "$THREAD_ID"
-      codex "$@" --dangerously-bypass-approvals-and-sandbox \
-        --json --output-last-message "$OUT_FILE" "$msg" >"$LOG_FILE" 2>&1
+      set -- "$@" --dangerously-bypass-approvals-and-sandbox \
+        --json --output-last-message "$OUT_FILE"
+      [ -n "$SANDBOX_INNER_MODEL" ] && set -- "$@" --model "$SANDBOX_INNER_MODEL"
+      codex "$@" "$msg" >"$LOG_FILE" 2>&1
     ' </dev/null || true
 
   bash "$SCRIPT_DIR/codex-token-sync.sh" push >&2 || true

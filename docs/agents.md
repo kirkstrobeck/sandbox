@@ -4,9 +4,9 @@ Two agents, and a container between them. The outer agent runs on your Mac,
 talks to you, and does no work. The inner agent runs inside Docker with
 permissions turned off and does all of it.
 
-This page covers what changes depending on which client you drive the outer
-agent from — Claude Code, Codex, or Cursor — because the enforcement story is
-genuinely different in each, and one of the three has none.
+All three clients — Claude Code, Codex, Cursor — work on both sides of that
+boundary. What differs between them is enforcement, and the difference is real:
+one of the three has none.
 
 ## The boundary, and what actually holds it
 
@@ -100,59 +100,144 @@ itself. If `--output-last-message` comes back empty — the run died early — t
 dispatcher falls back to the last `agent_message` in the JSONL stream rather
 than reporting nothing.
 
-## Cursor: policy only, and that is a real limitation
+## Cursor: a full inner agent, an outer one with no enforcement
 
-Cursor reads `.cursor/rules/sandbox.mdc`, installed with `alwaysApply: true`. It
-says the same thing `AGENTS.md` says and points at it.
+Two separate things, and it is worth not blurring them.
 
-**Cursor has no enforcement whatsoever.** The `PreToolUse` hooks are a Claude
-Code feature; they do not run in Cursor. There is no gate, no denial, no test
-suite covering it. If the Cursor agent decides to run `pnpm install` in the
-terminal on your Mac, it runs.
+**Inside**, Cursor is first-class. The CLI is in the image, its credential is
+bridged like the other two, and `dispatch-cursor.sh` drives it exactly the way
+the Codex backend drives Codex. `./sandbox -a cursor "task"` works, and a Cursor
+outer agent gets one by default.
 
-State that plainly rather than assuming the rule covers it. In Cursor the
-boundary is only as good as the rule, so hold it deliberately: the moment you
-are about to run a command in the terminal is the moment to dispatch instead. If
-you want the mechanical version, drive the outer agent from Claude Code.
+**Outside**, Cursor reads `.cursor/rules/sandbox.mdc`, installed with
+`alwaysApply: true`, which says what `AGENTS.md` says and points at it. But
+**Cursor still has no `PreToolUse` enforcement** — those hooks are a Claude Code
+feature and they do not run there, so nothing stops a Cursor outer agent from
+running `pnpm install` on your Mac. In Cursor the boundary is only as good as
+the rule: the moment you are about to run a command in the terminal is the
+moment to dispatch instead. If you want the mechanical version, drive the outer
+agent from Claude Code.
+
+The inner Cursor invocation is:
+
+```bash
+agent -p --force --trust --sandbox disabled --output-format stream-json \
+  [--resume <session-id>] [--model <id>] -- "$msg"
+```
+
+`--force` is the yolo flag. `--trust` is not optional in practice: in print mode
+an untrusted workspace stops the run rather than prompting, and a bind mount the
+container has never seen is untrusted by definition. `--sandbox disabled` turns
+off Cursor's own process sandbox, which is redundant inside a throwaway
+container and is the layer most likely to fail for reasons unrelated to the
+task — the container is the boundary.
+
+Like Codex, Cursor has no `--continue` that survives a fresh process, so
+`dispatch-cursor.sh` persists the `session_id` every stream-json line carries to
+`tools/sandbox/.cache/cursor-session` and resumes it explicitly. That is what
+makes `./sandbox -c` mean one thing across all three agents. And because the
+stream is JSONL, `./sandbox tail -f` shows real step-by-step progress for a
+Cursor run, the same as for Codex.
 
 ## Which agent runs inside
 
-The inner agent is auto-detected from the environment your outer client leaves
-behind, in `tools/sandbox/agent.sh`:
+**The inner agent is the same product as the outer one.** Not because the three
+are interchangeable, but because they are not: the two halves share a repo, a
+task and a model, and a Codex outer handing work to a Claude inner means the
+agent that wrote the dispatch and the agent that reads it disagree about their
+own conventions.
 
-1. `SANDBOX_AGENT` if set — `codex` or `claude`, anything else is an error.
+Nobody is asked. The outer client leaves fingerprints in the environment of
+every command it runs, and `tools/sandbox/agent.sh` reads them:
+
+1. `SANDBOX_AGENT` if set — `codex`, `claude` or `cursor`; anything else is an
+   error.
 2. **Codex**, if any `CODEX_*` variable exists or `TERM_PROGRAM=codex`.
 3. **Claude**, if `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, or
    `CLAUDE_AGENT_SDK_VERSION` is set.
-4. A prompt, but only when stdin and stdout are both terminals — a script cannot
+4. **Cursor**, if `CURSOR_AGENT` or `CURSOR_TRACE_ID` is set.
+5. A prompt, but only when stdin and stdout are both terminals — a script cannot
    answer, and blocking on a prompt nobody will ever answer is worse than
    picking a default.
-5. `SANDBOX_DEFAULT_AGENT` from `sandbox.conf`, default `claude`.
+6. `SANDBOX_DEFAULT_AGENT` from `sandbox.conf`, default `claude`.
 
 **Codex is checked before Claude on purpose.** Some Codex installs inherit
 unrelated `CLAUDE_*` tuning variables from a shell profile, so looking for those
 first would misidentify a Codex session as a Claude one. The order is the fix.
 
-Override for one run with `./sandbox -a codex "task"`, or permanently with
+**Cursor is checked last of the three on purpose too.** Claude Code and Codex
+are both things people run *inside* a Cursor terminal, so when both sets of
+markers are present the CLI actually executing the command is the right answer,
+and it got its turn first. `CURSOR_AGENT=1` is the reliable marker — the Cursor
+CLI sets it in the environment of every shell command its agent runs.
+`CURSOR_TRACE_ID` comes from the Cursor IDE's integrated terminal and covers the
+in-editor agent. `TERM_PROGRAM` is no help: Cursor is a VS Code fork and reports
+itself as `vscode`, which is what real VS Code reports too.
+
+Override for one run with `./sandbox -a cursor "task"`, or permanently with
 `SANDBOX_DEFAULT_AGENT`. Whichever is chosen, `require_agent_credential` pulls
 that agent's credential before the container starts, so a missing login fails on
 the Mac with the command that fixes it instead of failing later inside the
 container. See [credentials.md](credentials.md).
 
+## Which model runs inside
+
+The other half of "same product": where the outer model can be read, the inner
+run gets the same id. An outer agent on a big model writing a dispatch for an
+inner agent on a small one is a bad surprise in exactly one direction, and it is
+invisible in the transcript.
+
+`tools/sandbox/model.sh` resolves it, in order:
+
+1. `SANDBOX_MODEL`, or `./sandbox -m <id>` for one run. Wins over everything.
+2. The outer client's own setting:
+
+   | Agent | Read from | Passed as |
+   | --- | --- | --- |
+   | Claude | `ANTHROPIC_MODEL` (or `CLAUDE_MODEL`) | `claude -p --model <id>` |
+   | Codex | `CODEX_MODEL`, else top-level `model =` in `~/.codex/config.toml` | `codex exec --model <id>` |
+   | Cursor | `CURSOR_MODEL`, else `model` in Cursor's `cli-config.json` | `agent --model <id>` |
+
+3. `SANDBOX_DEFAULT_MODEL` from `sandbox.conf` — a project-wide pin.
+4. **Nothing.** No `--model` flag is passed and the inner CLI uses its own
+   default.
+
+Step 4 is deliberate and it is the common case. None of the three clients
+exports "the model I am currently running"; the closest each has is a setting
+the human chose, and if they did not choose one there is nothing to read.
+Inventing an id there would pin a model nobody asked for, which is worse than
+the CLI's own default being used. The dispatch line says which way it went:
+
+```
+→ cursor (inner) · gpt-5 ...
+→ claude (inner) ...              # nothing readable; inner default
+```
+
+The id is passed through verbatim, so it has to be one that agent understands —
+`./sandbox -m gpt-5` against a Claude inner fails inside the container, not on
+the Mac.
+
 ## Inside the container
 
 The inner agent gets its own instructions: `tools/sandbox/AGENT.md` is baked into
-the image and copied by `entrypoint.sh` to both `/home/agent/.claude/CLAUDE.md`
-and `/home/agent/.codex/AGENTS.md`, so whichever agent runs finds them. They say
-to do the whole task, that `tools/sandbox/*.sh` are host-side scripts it must not
-run — dispatching from inside is an agent calling itself — and to always pass
-`git commit -m`, since the container's editor is `/bin/false` and a bare commit
-fails fast rather than hanging a non-interactive run forever.
+the image and copied by `entrypoint.sh` to each agent's user-global location —
+`/home/agent/.claude/CLAUDE.md`, `/home/agent/.codex/AGENTS.md`, and
+`/home/agent/.cursor/rules/sandbox-inner.mdc` with `alwaysApply: true` — so
+whichever one runs finds them. They say to do the whole task, that
+`tools/sandbox/*.sh` are host-side scripts it must not run — dispatching from
+inside is an agent calling itself — and to always pass `git commit -m`, since
+the container's editor is `/bin/false` and a bare commit fails fast rather than
+hanging a non-interactive run forever.
+
+That user-global copy is load-bearing. The project's own `AGENTS.md` says "you
+are the OUTER agent, dispatch everything"; an inner agent reading only that file
+would dutifully try to dispatch to itself. The user-global file is what outranks
+it.
 
 Only one inner run happens at a time. Each dispatch kills any previous
-`claude -p` or `codex exec` first: a run orphaned by a disconnected client is
-still holding the repo, and two agents editing one worktree produce corruption
-that is very hard to attribute later.
+`claude -p`, `codex exec` or `cursor-agent` first: a run orphaned by a
+disconnected client is still holding the repo, and two agents editing one
+worktree produce corruption that is very hard to attribute later.
 
 The answer is written to a file **inside** the container, on the bind mount. If
 your client dies mid-run the work still finishes and the answer is still on

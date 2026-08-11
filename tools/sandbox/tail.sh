@@ -17,30 +17,50 @@ RUN_DIR="$CACHE_DIR/run"
 follow=0
 [ "${1:-}" = "-f" ] || [ "${1:-}" = "--follow" ] && follow=1
 
-# Codex streams JSONL as it goes; Claude's `-p --output-format json` writes one
-# object at the end. So for Claude the honest live signal is the process itself.
-render_codex() {
+# Codex and Cursor both stream JSONL as they go, into the same last.jsonl;
+# Claude's `-p --output-format json` writes one object at the end, so for Claude
+# the honest live signal is the process itself.
+#
+# The two streams are told apart by their own line shapes rather than by a flag,
+# because tail.sh has no idea which agent ran and the file does.
+render_stream() {
   jq -r '
     if .type == "item.completed" then
+      # Codex
       (.item.type) as $t
       | if $t == "agent_message" then "· " + (.item.text // "" | .[0:400])
         elif $t == "command_execution" then "$ " + (.item.command // "")
         elif $t == "file_change" then "~ " + ((.item.changes // []) | map(.path) | join(", "))
         elif $t == "reasoning" then "  " + (.item.text // "" | .[0:200])
         else "· " + $t end
+    elif .type == "assistant" then
+      # Cursor: text is a content array, flushed at each tool-call boundary.
+      "· " + ([.message.content[]? | select(.type == "text") | .text] | add // "" | .[0:400])
+    elif .type == "tool_call" and .subtype == "started" then
+      # The tool call is a protobuf oneof, so the tool name is the single key
+      # inside it and the shape below that varies per tool.
+      (.tool_call // {} | keys_unsorted[0] // "tool") as $t
+      | "$ " + ($t | sub("ToolCall$"; ""))
+        + ((.tool_call[$t]?.args?.command // .tool_call[$t]?.args?.path // "")
+           | if . == "" then "" else " " + (. | tostring | .[0:200]) end)
+    elif .type == "thinking" then empty
     else empty end' 2>/dev/null
 }
 
 if [ -f "$RUN_DIR/last.jsonl" ]; then
   if [ "$follow" = 1 ]; then
-    tail -f -n 40 "$RUN_DIR/last.jsonl" | render_codex
+    tail -f -n 40 "$RUN_DIR/last.jsonl" | render_stream
     exit 0
   fi
-  tail -n 40 "$RUN_DIR/last.jsonl" | render_codex
+  tail -n 40 "$RUN_DIR/last.jsonl" | render_stream
   exit 0
 fi
 
 sandbox_docker_host
+if docker exec "$SANDBOX_NAME" pgrep -f 'cursor-agent' >/dev/null 2>&1; then
+  echo "Inner Cursor is starting; its stream appears here once the first line lands."
+  exit 0
+fi
 if docker exec "$SANDBOX_NAME" pgrep -f 'claude -p' >/dev/null 2>&1; then
   echo "Inner Claude is running. Its transcript arrives all at once when it finishes."
   echo "Recover it any time with: bash tools/sandbox/dispatch.sh --result"

@@ -31,6 +31,7 @@ ensure_image() {
     --build-arg "DOCKER_CLI_VERSION=$SANDBOX_DOCKER_CLI_VERSION" \
     --build-arg "PNPM_VERSION=$SANDBOX_PNPM_VERSION" \
     --build-arg "CODEX_VERSION=$SANDBOX_CODEX_VERSION" \
+    --build-arg "CURSOR_VERSION=$SANDBOX_CURSOR_VERSION" \
     --build-arg "WITH_PLAYWRIGHT=$SANDBOX_WITH_PLAYWRIGHT" \
     --build-arg "PLAYWRIGHT_VERSION=$SANDBOX_PLAYWRIGHT_VERSION" \
     --build-arg "SANDBOX_STACK=$SANDBOX_STACK" \
@@ -40,7 +41,8 @@ ensure_image() {
 }
 
 prepare_cache() {
-  mkdir -p "$CACHE_DIR/claude-home" "$CACHE_DIR/codex-home" "$CACHE_DIR/gh"
+  mkdir -p "$CACHE_DIR/claude-home" "$CACHE_DIR/codex-home" \
+           "$CACHE_DIR/cursor-home" "$CACHE_DIR/gh"
 
   # This file is bind-mounted as a FILE, so it has to exist before the container
   # starts or Docker creates a directory in its place.
@@ -48,6 +50,7 @@ prepare_cache() {
 
   bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged."
   bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged."
+  bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged."
   bash "$SCRIPT_DIR/github-token-sync.sh" >&2 || log "WARN: git push from inside the sandbox will not work."
 }
 
@@ -73,6 +76,7 @@ container_is_current() {
   has_mount /workspace || return 1
   has_mount "$REPO_ROOT" || return 1
   has_mount /home/agent/.config/gh || return 1
+  has_mount /home/agent/.config/cursor || return 1
 
   local dir
   while IFS= read -r dir; do

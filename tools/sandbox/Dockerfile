@@ -8,11 +8,12 @@ FROM ${NODE_IMAGE}
 ARG DOCKER_CLI_VERSION=27.5.1
 ARG PNPM_VERSION=10.15.0
 ARG CODEX_VERSION=latest
+ARG CURSOR_VERSION=latest
 ARG WITH_PLAYWRIGHT=0
 ARG PLAYWRIGHT_VERSION=1.55.0
 ARG HOST_UID=1000
 ARG HOST_GID=1000
-ARG SANDBOX_STACK=v1
+ARG SANDBOX_STACK=v2
 
 # boot.sh reads this label off the built image and rebuilds when it drifts from
 # sandbox.conf. Without it, a Dockerfile change silently never reaches anyone
@@ -66,6 +67,34 @@ RUN npm install -g \
       "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force
 
+# The Cursor CLI is not on npm. Its installer downloads a self-contained package
+# and symlinks the binary into ~/.local/bin, which would put it in root's home
+# during a build; the tarball goes to a system path here instead, and both names
+# the CLI answers to are linked so `agent` and `cursor-agent` both work.
+#
+# CURSOR_VERSION=latest reads the version out of the official install script
+# rather than guessing a URL — that script is where Cursor publishes which lab
+# build is current. Pin an explicit version in sandbox.conf for a reproducible
+# image; `latest` is a floating dependency by definition.
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) cur_arch=x64 ;; \
+      arm64) cur_arch=arm64 ;; \
+      *) echo "unsupported arch for the Cursor CLI" >&2; exit 1 ;; \
+    esac; \
+    ver="${CURSOR_VERSION}"; \
+    if [ "$ver" = "latest" ]; then \
+      ver="$(curl -fsSL https://cursor.com/install \
+             | sed -n 's#.*/lab/\([0-9][^/"]*\)/.*#\1#p' | head -1)"; \
+      [ -n "$ver" ] || { echo "could not read the current Cursor CLI version" >&2; exit 1; }; \
+    fi; \
+    mkdir -p /usr/local/share/cursor-agent; \
+    curl -fsSL "https://downloads.cursor.com/lab/${ver}/linux/${cur_arch}/agent-cli-package.tar.gz" \
+      | tar --strip-components=1 -xzf - -C /usr/local/share/cursor-agent; \
+    ln -sf /usr/local/share/cursor-agent/cursor-agent /usr/local/bin/agent; \
+    ln -sf /usr/local/share/cursor-agent/cursor-agent /usr/local/bin/cursor-agent; \
+    agent --version
+
 # Browsers are big; most projects don't need them. Off by default.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN if [ "${WITH_PLAYWRIGHT}" = "1" ]; then \
@@ -80,7 +109,9 @@ RUN set -eux; \
     if id node >/dev/null 2>&1; then userdel -r node 2>/dev/null || userdel node; fi; \
     if ! getent group "${HOST_GID}" >/dev/null; then groupadd -g "${HOST_GID}" agent; fi; \
     useradd -m -u "${HOST_UID}" -g "${HOST_GID}" -s /bin/bash agent; \
-    mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.config/gh /workspace; \
+    mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor \
+             /home/agent/.cursor/rules /home/agent/.config/gh \
+             /home/agent/.config/cursor /home/agent/.local/bin /workspace; \
     chown -R "${HOST_UID}:${HOST_GID}" /home/agent /workspace
 
 # The repo arrives as a bind mount owned by the host user, and git refuses to
@@ -88,7 +119,7 @@ RUN set -eux; \
 # container with one human's code, that check protects nothing.
 RUN git config --system --add safe.directory '*'
 
-# Inner agent rules, seeded into both agents' home dirs by the entrypoint.
+# Inner agent rules, seeded into every agent's home dir by the entrypoint.
 COPY AGENT.md /etc/sandbox-agent.md
 COPY entrypoint.sh /usr/local/bin/sandbox-entrypoint
 COPY mac-save-bridge.mjs /usr/local/lib/mac-save-bridge.mjs
