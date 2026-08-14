@@ -51,12 +51,8 @@ ensure_mac_save_bridge() {
   fi
 
   local roots_stamp="$CACHE_DIR/.bridge-roots"
-  if bridge_running; then
-    local cached_roots
-    cached_roots="$(cat "$roots_stamp" 2>/dev/null || true)"
-    if [ "$cached_roots" = "$roots" ]; then
-      return 0
-    fi
+  if [ "$(cat "$roots_stamp" 2>/dev/null || true)" = "$roots" ]; then
+    return 0
   fi
 
   docker exec "$SANDBOX_NAME" pkill -f 'mac-save-bridge\.mjs' >/dev/null 2>&1 || true

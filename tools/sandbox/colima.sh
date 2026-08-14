@@ -26,6 +26,11 @@ colima_inotify_daemon_running() {
 # has the daemon running, and it keeps injecting until something stops it — so
 # boot.sh clearing it is what makes the fix survive into an already-running VM.
 stop_colima_inotify() {
+  if sandbox_stamp_fresh "$CACHE_DIR/stamps/.inotify-checked" 3600; then
+    return 0
+  fi
+  mkdir -p "$CACHE_DIR/stamps"
+  touch "$CACHE_DIR/stamps/.inotify-checked"
   if ! command -v colima >/dev/null 2>&1; then
     return 0
   fi
@@ -41,13 +46,20 @@ stop_colima_inotify() {
 }
 
 ensure_colima() {
+  if sandbox_stamp_fresh "$CACHE_DIR/stamps/.colima-ok" 60; then
+    return 0
+  fi
   if ! command -v colima >/dev/null 2>&1; then
     return 0
   fi
   if colima status >/dev/null 2>&1; then
+    mkdir -p "$CACHE_DIR/stamps"
+    touch "$CACHE_DIR/stamps/.colima-ok"
     return 0
   fi
   echo "Starting Colima..." >&2
   # shellcheck disable=SC2046
   colima start $(colima_start_flags) >&2
+  mkdir -p "$CACHE_DIR/stamps"
+  touch "$CACHE_DIR/stamps/.colima-ok"
 }

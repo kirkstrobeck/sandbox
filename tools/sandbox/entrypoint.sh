@@ -25,6 +25,16 @@ fi
 # would dutifully try to dispatch to itself. The user-global copy is what
 # outranks it.
 mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules
+
+# ~/.claude.json lives in the directory mount, never as its own file mount.
+# A file bind-mount pins an inode; host rewrites then desync and truncate it.
+if [ ! -L /home/agent/.claude.json ]; then
+  rm -f /home/agent/.claude.json
+fi
+[ -f /home/agent/.claude/claude.json ] || printf '{}\n' > /home/agent/.claude/claude.json
+ln -sfn /home/agent/.claude/claude.json /home/agent/.claude.json
+chown -h agent:"$(id -g agent)" /home/agent/.claude.json /home/agent/.claude/claude.json 2>/dev/null || true
+
 if [ -f /etc/sandbox-agent.md ]; then
   cp -f /etc/sandbox-agent.md /home/agent/.claude/CLAUDE.md 2>/dev/null || true
   cp -f /etc/sandbox-agent.md /home/agent/.codex/AGENTS.md 2>/dev/null || true

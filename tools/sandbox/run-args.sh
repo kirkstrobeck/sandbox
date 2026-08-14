@@ -67,8 +67,7 @@ sandbox_mount_args() {
     -v "$CACHE_DIR/claude-home:/home/agent/.claude" \
     -v "$CACHE_DIR/codex-home:/home/agent/.codex" \
     -v "$CACHE_DIR/cursor-home:/home/agent/.config/cursor" \
-    -v "$CACHE_DIR/gh:/home/agent/.config/gh" \
-    -v "$CACHE_DIR/claude.json:/home/agent/.claude.json"
+    -v "$CACHE_DIR/gh:/home/agent/.config/gh"
   sandbox_worktree_mount_args
   sandbox_extra_mount_args
 
@@ -82,7 +81,7 @@ sandbox_mount_args() {
   # own, at /var/run/docker.sock. Gate on the daemon answering rather than on a
   # file existing on the Mac, for the same reason: the Mac is not where the path
   # gets looked up.
-  if docker info >/dev/null 2>&1; then
+  if [ "${SANDBOX_DOCKER_OK:-}" = 1 ] || docker info >/dev/null 2>&1; then
     printf '%s\n' -v "${SANDBOX_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
   fi
 

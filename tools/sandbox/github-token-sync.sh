@@ -91,6 +91,17 @@ read_cached_login() {
   grep '^ *user: ' "$HOSTS_FILE" 2>/dev/null | awk '{print $2}' | tail -1
 }
 
+# Fresh hosts.yml is enough for a warm dispatch: skip `gh auth token` and
+# `gh api user`. Re-check at most every 15 minutes, or when the file is gone.
+if [ -f "$HOSTS_FILE" ]; then
+  age="$(perl -e 'print int(time() - (stat($ARGV[0]))[9])' "$HOSTS_FILE" 2>/dev/null || printf '99999\n')"
+  if [ "$age" -lt 900 ] 2>/dev/null; then
+    login="$(read_cached_login)"
+    [ -n "$login" ] && say "GitHub auth: using cached login for $login."
+    exit 0
+  fi
+fi
+
 token="$(read_token)"
 if [ -z "$token" ]; then
   say "No GitHub token on the host. Run 'gh auth login' (or export GH_TOKEN)."

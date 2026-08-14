@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/common.sh"
 
 BENCH_AGENT="${SANDBOX_BENCH_AGENT:-claude}"
+export SANDBOX_AGENT="$BENCH_AGENT"
 BENCH_BUDGET="${SANDBOX_BENCH_BUDGET_MS:-2270}"
 BENCH_PROMPT="Write a file named foo.md at the repository root that contains exactly the word foo followed by a newline. Do not commit. Do not run tests. Do not create any other files."
 FOO="$REPO_ROOT/foo.md"

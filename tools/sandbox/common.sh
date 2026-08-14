@@ -37,7 +37,14 @@ sandbox_docker_host() {
 sandbox_docker_host
 
 sandbox_require_docker() {
+  if sandbox_stamp_fresh "$CACHE_DIR/stamps/.docker-ok" 60; then
+    SANDBOX_DOCKER_OK=1
+    return 0
+  fi
   if docker info >/dev/null 2>&1; then
+    SANDBOX_DOCKER_OK=1
+    mkdir -p "$CACHE_DIR/stamps"
+    touch "$CACHE_DIR/stamps/.docker-ok"
     return 0
   fi
   echo "Docker daemon not reachable. Start it with: colima start" >&2

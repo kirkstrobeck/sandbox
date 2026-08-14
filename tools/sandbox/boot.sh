@@ -22,7 +22,12 @@ image_stack() {
 }
 
 ensure_image() {
+  if [ -z "${SANDBOX_REBUILD:-}" ] && sandbox_stamp_fresh "$CACHE_DIR/stamps/.image-$SANDBOX_STACK" 300; then
+    return 0
+  fi
   if [ "$(image_stack)" = "$SANDBOX_STACK" ] && [ -z "${SANDBOX_REBUILD:-}" ]; then
+    mkdir -p "$CACHE_DIR/stamps"
+    touch "$CACHE_DIR/stamps/.image-$SANDBOX_STACK"
     return 0
   fi
   log "Building $SANDBOX_IMAGE (stack $SANDBOX_STACK). First build takes a few minutes."
@@ -44,14 +49,21 @@ prepare_cache() {
   mkdir -p "$CACHE_DIR/claude-home" "$CACHE_DIR/codex-home" \
            "$CACHE_DIR/cursor-home" "$CACHE_DIR/gh" "$CACHE_DIR/stamps"
 
-  # This file is bind-mounted as a FILE, so it has to exist before the container
-  # starts or Docker creates a directory in its place.
-  [ -f "$CACHE_DIR/claude.json" ] || printf '{}\n' >"$CACHE_DIR/claude.json"
+  # ~/.claude.json lives inside the claude-home *directory* mount (see
+  # entrypoint.sh / ensure_claude_json_link). A FILE bind-mount of claude.json
+  # pinned an inode; host rewrites then left the container reading a truncated
+  # copy ("JSON Parse error: Unterminated string").
+  local cj="$CACHE_DIR/claude-home/claude.json"
+  local old_cj="$CACHE_DIR/claude.json"
+  if [ ! -f "$cj" ] && [ -f "$old_cj" ]; then
+    cp "$old_cj" "$cj" 2>/dev/null || true
+  fi
+  if ! jq empty "$cj" >/dev/null 2>&1; then
+    printf '{}\n' >"$cj"
+  fi
 
   # Seed trust so the inner Claude doesn't stop on a trust dialog.
-  # Skip the jq rewrite entirely when both trust keys are already true — avoids
-  # a write and a cat-to-bind-mounted-file on every warm boot.
-  local cj="$CACHE_DIR/claude.json"
+  # Skip the jq rewrite entirely when both trust keys are already true.
   if ! jq -e --arg r "$REPO_ROOT" \
        '.projects["/workspace"].hasTrustDialogAccepted == true and
         .projects[$r].hasTrustDialogAccepted == true' \
@@ -65,10 +77,7 @@ prepare_cache() {
           .projects[$r] |= (. // {}) |
           .projects[$r].hasTrustDialogAccepted = true' \
          "$cj" >"$tmp" 2>/dev/null; then
-      # Same inode: this path is bind-mounted as a FILE. `mv` would replace the
-      # host inode and leave the container reading a stale or truncated copy.
-      cat "$tmp" >"$cj"
-      rm -f "$tmp"
+      mv "$tmp" "$cj"
     else
       rm -f "$tmp"
     fi
@@ -82,13 +91,13 @@ prepare_cache() {
     bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged."
     bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged."
     bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged."
-  else
+  elif ! sandbox_stamp_fresh "$CACHE_DIR/stamps/.cred-synced-$agent" 60; then
     case "$agent" in
       claude) bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged." ;;
       codex)  bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged." ;;
       cursor) bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged." ;;
     esac
-    # Stamp so dispatch.sh can skip the redundant require_agent_credential call.
+    mkdir -p "$CACHE_DIR/stamps"
     touch "$CACHE_DIR/stamps/.cred-synced-$agent"
   fi
   bash "$SCRIPT_DIR/github-token-sync.sh" >&2 || log "WARN: git push from inside the sandbox will not work."
@@ -97,48 +106,20 @@ prepare_cache() {
 container_exists() { docker inspect "$SANDBOX_NAME" >/dev/null 2>&1; }
 container_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SANDBOX_NAME" 2>/dev/null)" = "true" ]; }
 
-has_mount() {
-  docker inspect -f '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' "$SANDBOX_NAME" 2>/dev/null |
-    grep -qx "$1"
-}
-
-# A container started under an older config keeps that config forever — Docker
-# has no way to add a mount or a port to a running container. So rather than
-# reuse whatever is there, check that what is running matches what the config
-# now asks for, and recreate when it doesn't. Silent drift here is the kind of
-# bug that costs an afternoon.
+# One inspect, not one per mount: Colima round-trips were the warm-boot floor.
 container_is_current() {
-  local want_image running_image
+  local info running_image running_fp want_image want_fp
+  info="$(docker inspect -f '{{.State.Running}} {{.Image}} {{index .Config.Labels "sandbox.config-fp"}}' \
+    "$SANDBOX_NAME" 2>/dev/null || true)"
+  [ -n "$info" ] || return 1
+  [ "${info%% *}" = "true" ] || return 1
+  info="${info#* }"
+  running_image="${info%% *}"
+  running_fp="${info#* }"
   want_image="$(docker image inspect -f '{{.Id}}' "$SANDBOX_IMAGE" 2>/dev/null || true)"
-  running_image="$(docker inspect -f '{{.Image}}' "$SANDBOX_NAME" 2>/dev/null || true)"
   [ -n "$want_image" ] && [ "$want_image" = "$running_image" ] || return 1
-
-  has_mount /workspace || return 1
-  has_mount "$REPO_ROOT" || return 1
-  has_mount /home/agent/.config/gh || return 1
-  has_mount /home/agent/.config/cursor || return 1
-
-  local dir
-  while IFS= read -r dir; do
-    [ -z "$dir" ] && continue
-    has_mount "/workspace/$dir" || return 1
-  done < <(sandbox_list "$SANDBOX_VOLUME_DIRS")
-
-  local port container_port
-  while IFS= read -r port; do
-    [ -z "$port" ] && continue
-    container_port="${port##*:}"
-    docker inspect -f '{{json .HostConfig.PortBindings}}' "$SANDBOX_NAME" 2>/dev/null |
-      grep -q "\"$container_port/tcp\"" || return 1
-  done < <(sandbox_list "$SANDBOX_PORTS")
-
-  # Config fingerprint: mount args + env args + stack + ports + volume dirs.
-  # Stored as a label at run time; mismatch means the config changed.
-  local want_fp running_fp
   want_fp="$(sandbox_config_fingerprint 2>/dev/null || true)"
-  running_fp="$(docker inspect -f '{{index .Config.Labels "sandbox.config-fp"}}' "$SANDBOX_NAME" 2>/dev/null || true)"
   [ -z "$want_fp" ] || [ "$want_fp" = "$running_fp" ] || return 1
-
   return 0
 }
 
@@ -176,7 +157,7 @@ explain_run_failure() {
 }
 
 ensure_container() {
-  if container_exists && container_running && container_is_current; then
+  if container_is_current; then
     return 0
   fi
   if container_exists; then
@@ -205,12 +186,29 @@ ensure_container() {
   return 1
 }
 
+# Point ~/.claude.json at the directory-mounted copy. Safe to run on every
+# boot: ln -sfn is idempotent. Lives in boot.sh so a running image that was
+# built before entrypoint.sh grew the same link still works without a rebuild.
+ensure_claude_json_link() {
+  local cid stamp="$CACHE_DIR/stamps/.claude-json-link"
+  cid="$(docker inspect -f '{{.Id}}' "$SANDBOX_NAME" 2>/dev/null || true)"
+  [ -n "$cid" ] && [ "$(cat "$stamp" 2>/dev/null || true)" = "$cid" ] && return 0
+  docker exec -u 0 "$SANDBOX_NAME" sh -c '
+    rm -f /home/agent/.claude.json
+    [ -f /home/agent/.claude/claude.json ] || printf "{}\n" > /home/agent/.claude/claude.json
+    ln -sfn /home/agent/.claude/claude.json /home/agent/.claude.json
+    chown -h agent:$(id -g agent) /home/agent/.claude.json /home/agent/.claude/claude.json
+  ' >/dev/null 2>&1 || true
+  [ -n "$cid" ] && mkdir -p "$CACHE_DIR/stamps" && printf '%s' "$cid" >"$stamp"
+}
+
 ensure_colima
 sandbox_require_docker
 stop_colima_inotify
 ensure_image
 prepare_cache
 ensure_container
+ensure_claude_json_link
 fix_volume_ownership
 ensure_mac_save_bridge
 

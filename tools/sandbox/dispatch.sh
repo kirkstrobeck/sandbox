@@ -64,6 +64,7 @@ while [ $# -gt 0 ]; do
 done
 
 agent="$(resolve_sandbox_agent noprompt)" || exit 2
+export SANDBOX_AGENT="$agent"
 
 # Recovery path. A dispatch that outlived its client still finished inside the
 # container and still wrote its answer to disk; this reads that back without
