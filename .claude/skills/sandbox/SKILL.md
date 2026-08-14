@@ -26,8 +26,9 @@ reference for carrying it out.
 | `./sandbox test` | Run the gate test suite. |
 | `./sandbox update` | Upgrade `tools/sandbox` from the repo it was installed from. |
 
-A long message is safer on stdin than as an argument:
-`printf '%s' "$LONG" | ./sandbox`
+A long message is safer as a file than as an argument:
+`./sandbox --file path` (or `./sandbox --message-file path`).
+Do not pipe into `./sandbox` — the outer gate treats a pipe as chaining.
 
 ## Writing the dispatch
 
@@ -88,10 +89,25 @@ own environment: Codex outer → Codex inner, Claude → Claude, Cursor → Curs
 Override per dispatch with `./sandbox -a cursor "task"`, or permanently with
 `SANDBOX_DEFAULT_AGENT` in `tools/sandbox/sandbox.conf`.
 
-The model follows the same rule where it can be read — `SANDBOX_MODEL`, else the
-outer client's own setting, else `SANDBOX_DEFAULT_MODEL`. If none of those says
-anything, no `--model` flag is passed and the inner CLI uses its default.
-`./sandbox -m <id>` sets it for one run.
+**Not the same model.** What a dispatch starts is a manager: it writes a spec,
+spawns cheaper workers for the edits and the tests, reviews, and answers. The
+manager model is resolved by `tools/sandbox/model.sh` — `SANDBOX_MODEL`
+(`./sandbox -m <id>`, one run), else a non-empty `<agent>_manager=` line in the
+daily snapshot, else `SANDBOX_DEFAULT_MODEL`, else a high-value default per
+agent. The outer client's model is deliberately not copied; the two halves have
+different jobs.
+
+The snapshot is `SANDBOX_MODEL_DAILY`: model/plan/promo text the **host**
+fetches at most once every 24 hours into `$TMPDIR/sandbox-model-daily` and hands
+to the container as an environment variable. It is read first and refetched only
+when missing or stale, it is shared by every sandbox on the machine, and it is
+**not a new mount** — the container never sees that path. A failed fetch still
+writes a stub, so a dead network costs one attempt a day rather than one per
+dispatch.
+
+You do not pick worker models and you do not tell the manager how to split the
+job. The manager's standing rule is that tokens build scripts and only scripts
+do work; those scripts stay in the project tree.
 
 ## Never
 

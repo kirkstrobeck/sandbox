@@ -63,8 +63,9 @@ Sandbox config changed; recreating <project>-sandbox-1a2b3c4d.
 
 Silent drift here is the kind of bug that costs an afternoon, which is why the
 check is explicit rather than optimistic. In practice: change ports, volumes, or
-mounts, then run `./sandbox up`. If it somehow does not take, `./sandbox
-rebuild`.
+mounts, then run `./sandbox up` — it recreates the container when the
+`sandbox.config-fp` label no longer matches the current config fingerprint. If
+that somehow does not take, `./sandbox rebuild`.
 
 Image-level settings (the toolchain versions below) are a different lever:
 `boot.sh` compares `SANDBOX_STACK` against the label baked into the image and
@@ -183,6 +184,76 @@ is correct for Colima and Docker Desktop alike, and pointing it at the Mac's
 and a unix socket cannot cross virtiofs anyway. Only change it for an unusual
 daemon layout. See [colima.md](colima.md). **Fixed at container creation.**
 
+## Project extension points
+
+These three variables let `sandbox.conf` extend the container without forking
+any harness files. All three are multi-line: assign once (overwriting clobbers),
+or append with `SANDBOX_EXTRA_MOUNTS+="..."`. **Fixed at container creation**
+for mounts; env takes effect immediately.
+
+### `SANDBOX_EXTRA_MOUNTS`
+
+Extra bind mounts, one per line: `host:container` or `host:container:rw|ro`.
+Comments and blank lines are ignored.
+
+```bash
+SANDBOX_EXTRA_MOUNTS="
+/path/to/my-secrets:/secrets:ro
+/path/to/shared-cache:/cache:rw
+"
+```
+
+The worktree's linked git common dir is already mounted automatically — do not
+list it here. Never put `$(git ...)` in this variable; the automatic worktree
+detection never forks git. A change to this variable changes the config
+fingerprint, so `./sandbox up` recreates the container automatically.
+
+### `SANDBOX_EXTRA_ENV`
+
+Extra environment variables passed into the container, one `NAME=value` per
+line. Useful for feature flags and non-secret config. For actual secrets, prefer
+`SANDBOX_EXTRA_MOUNTS` with a `ro` secrets directory — env vars end up in
+`docker inspect` output and process lists.
+
+```bash
+SANDBOX_EXTRA_ENV="
+EXAMPLE_FLAG=1
+MY_SERVICE_URL=http://my-service:8080
+"
+```
+
+### `SANDBOX_EXTRA_ALLOW`
+
+Extra glob patterns for the outer-gate Bash allowlist, one per line. Evaluated
+**after** the named denials, so `git`, `pnpm`, `rm`, and `ssh` cannot be
+re-enabled here regardless of what pattern you write.
+
+```bash
+SANDBOX_EXTRA_ALLOW="
+bash tools/dev-start.sh*
+bash tools/ci-check.sh
+"
+```
+
+This is how a project adds its own harness scripts to the outer allowlist without
+forking `outer-gate.sh`.
+
+## Path variables inside vs outside the container
+
+Two variables name the same directory but mean different things:
+
+| Variable | Set by | Value | Visible in |
+| --- | --- | --- | --- |
+| `REPO_ROOT` | `common.sh` | Physical host path of the project (e.g. `/Users/alice/my-project`) | Host harness scripts only |
+| `HOST_REPO_ROOT` | `run-args.sh` via `-e HOST_REPO_ROOT=$REPO_ROOT` | Same physical host path | Inside the container only |
+
+Inside the container, `/workspace` and `$HOST_REPO_ROOT` are both bind-mounted
+to the same tree; `/workspace` is the agent's working directory, and
+`HOST_REPO_ROOT` is what to hand the Docker daemon when starting a sibling
+container with a bind mount — the daemon resolves paths in the VM, not in the
+container, so `/workspace` would not be found. They are deliberately different
+strings (two separate Docker mounts of the same directory).
+
 ## Hot reload
 
 `SANDBOX_WATCH_DIRS` (default `src`), `SANDBOX_WATCH_INTERVAL_MS` (default
@@ -207,14 +278,46 @@ last: [agents.md](agents.md).
 
 ## `SANDBOX_DEFAULT_MODEL`
 
-Default empty. A project-wide pin for the inner agent's model, used only when
-the outer client's model cannot be read. `SANDBOX_MODEL` in the environment, or
-`./sandbox -m <id>` for one run, beats it.
+Default empty. A project-wide pin for the **manager** model — the model of the
+agent a dispatch starts inside the container, which routes and reviews and
+spawns cheaper workers to do the work. It is not the model the workers run on;
+the manager picks those per task.
 
-Leave it empty unless you mean it. Empty means no `--model` flag is passed and
-the inner CLI uses its own default, which is the honest answer when nothing
-readable says otherwise. The id is handed through verbatim, so it has to be one
-the chosen agent understands. Full resolution order: [agents.md](agents.md).
+`SANDBOX_MODEL` in the environment, or `./sandbox -m <id>` for one run, beats
+it. A non-empty `<agent>_manager=` line in the daily snapshot beats it too.
+Empty — the default — means the high-value per-agent default in
+`tools/sandbox/model.sh` is used: `claude-sonnet-4-6`, `gpt-5.3-codex`,
+`cursor-grok-4.6-high`. The outer client's own model is deliberately not copied.
+
+Set this when your account has a model that suits the manager job better than
+the shipped default, or when a default has gone stale. The id is handed through
+verbatim, so it has to be one the chosen agent understands. Full resolution
+order: [agents.md](agents.md).
+
+## The daily model snapshot
+
+The harness fetches a small model/plan/promo digest **on the host**, at most once
+every 24 hours, and passes today's text into the run as `SANDBOX_MODEL_DAILY` so
+the manager can pick a worker model without spending a web search on it.
+`tools/sandbox/model-daily.sh` owns it.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SANDBOX_MODEL_DAILY_FILE` | `$TMPDIR/sandbox-model-daily` | Host path. Read first; refetched only when missing or stale. `chmod 600`, written `mktemp` + `mv`, no history |
+| `SANDBOX_MODEL_DAILY_MAX_AGE` | `86400` | Seconds before the file is considered stale |
+| `SANDBOX_MODEL_DAILY_TIMEOUT` | `8` | Per-URL fetch timeout, the same budget as the update check |
+| `SANDBOX_MODEL_DAILY_FETCH_CMD` | unset | Replaces `curl`. Given one URL, prints the page. This is how the tests run offline |
+| `SANDBOX_MODEL_DAILY` | — | Not read from the file: **set by `dispatch.sh`** and passed to `docker exec -e`. Set it yourself to override the snapshot for one run |
+
+It is shared by every sandbox on the machine, because a promo is not
+project-specific. It is **not mounted** — the container never sees `$TMPDIR` and
+must not; the text crosses as an environment variable, which is why this is a
+host-side write like the update-check stamp rather than a new capability. See
+[security.md](security.md).
+
+Every failure path still writes the file, with `status=unavailable` and a
+timestamp. That is the point of the timestamp: a dead network costs one attempt
+a day, not one attempt per dispatch. Delete the file to force a refetch.
 
 ## Toolchain, baked into the image
 
@@ -354,8 +457,9 @@ can override is not one.
 | Variable | Effect |
 | --- | --- |
 | `SANDBOX_AGENT` | Inner agent for this invocation. Beats detection and the default. |
-| `SANDBOX_MODEL` | Inner model for this invocation. Beats detection and `SANDBOX_DEFAULT_MODEL`. What `./sandbox -m` sets. |
-| `ANTHROPIC_MODEL` / `CODEX_MODEL` / `CURSOR_MODEL` | Read as the outer client's model when `SANDBOX_MODEL` is unset. |
+| `SANDBOX_MODEL` | Manager model for this invocation. Beats the snapshot and `SANDBOX_DEFAULT_MODEL`. What `./sandbox -m` sets. |
+| `SANDBOX_MODEL_DAILY` | Today's model/plan/promo snapshot. Set by `dispatch.sh` and passed into the container; set it yourself to override for one run. |
+| `SANDBOX_MODEL_DAILY_FILE` / `_MAX_AGE` / `_TIMEOUT` / `_FETCH_CMD` | Where that snapshot lives, when it goes stale, how long a fetch may take, and what to fetch with. |
 | `CURSOR_API_KEY` | Bridged to the inner Cursor CLI ahead of any stored login. |
 | `SANDBOX_REBUILD=1` | Forces an image rebuild. What `./sandbox rebuild` sets. |
 | `SANDBOX_PORT_SCAN_LIMIT` | How far above a busy host port to look for a free one. Default `20`. |

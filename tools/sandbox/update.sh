@@ -31,6 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 ORIGIN_FILE="$SCRIPT_DIR/ORIGIN.md"
 STAMP="$CACHE_DIR/update-check"
+INSTALL_HASHES_FILE="$SCRIPT_DIR/.install-hashes"
 # Global, not a local in cmd_update: the EXIT trap runs after that function has
 # returned, and a local would be out of scope by then.
 CLEANUP_DIR=""
@@ -214,6 +215,42 @@ fetch_source() {
     die "could not download $REPO@$REF"
 }
 
+# Warn about replace-mode files that have been edited since the last install.
+# Hashes are stored in INSTALL_HASHES_FILE after each successful install.
+# Format: one "sha  path" line per file (shasum output).
+warn_replace_drift() {
+  [ -r "$INSTALL_HASHES_FILE" ] || return 0
+  local drifted="" stored_sha path current_sha
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    stored_sha="${line%% *}"
+    path="${line#*  }"
+    [ -n "$path" ] || continue
+    [ -f "$REPO_ROOT/$path" ] || continue
+    current_sha="$(shasum "$REPO_ROOT/$path" 2>/dev/null | cut -d' ' -f1)"
+    [ "$current_sha" = "$stored_sha" ] && continue
+    drifted="${drifted}  $path"$'\n'
+  done <"$INSTALL_HASHES_FILE"
+  if [ -n "$drifted" ]; then
+    log "warning: these replace files were edited locally and will be overwritten:"
+    printf '%s' "$drifted" >&2
+  fi
+}
+
+# Write hashes for the replace-mode files now on disk, keyed off the new manifest.
+write_install_hashes() {
+  local src="$1" manifest="$src/tools/sandbox/MANIFEST"
+  [ -r "$manifest" ] || return 0
+  local tmp
+  tmp="$(mktemp)"
+  ( cd "$REPO_ROOT" 2>/dev/null || exit 0
+    while IFS= read -r p; do
+      [ -n "$p" ] && [ -f "$p" ] && shasum "$p" 2>/dev/null
+    done < <(manifest_paths "$manifest" replace)
+  ) >"$tmp"
+  mv "$tmp" "$INSTALL_HASHES_FILE"
+}
+
 cmd_update() {
   # install.sh at the project root means this IS the starter repo, not a project
   # that installed it — the harness here is the working copy, and overwriting it
@@ -247,6 +284,9 @@ cmd_update() {
   log "  from $REPO@$REF${FROM:+ (local checkout $src)}"
   log ""
 
+  # Warn before overwriting any replace files the project has locally edited.
+  warn_replace_drift
+
   local before after paths
   before="$(mktemp)"; after="$(mktemp)"; paths="$(mktemp)"
   # Computed once, from the two manifests as they are right now — the "after"
@@ -254,37 +294,50 @@ cmd_update() {
   changed_paths "$src" >"$paths"
   hash_paths <"$paths" >"$before"
 
+  local install_flags=""
+  [ -n "${DRY_RUN:-}" ] && install_flags="--dry-run"
+  [ -n "$FORCE" ] && install_flags="${install_flags:+$install_flags }--force"
+
   SANDBOX_REPO="$REPO" SANDBOX_REF="$REF" SANDBOX_TARGET="$REPO_ROOT" \
     SANDBOX_ORIGIN_COMMIT="$commit" \
-    bash "$src/install.sh" || die "install.sh failed; nothing further was changed"
+    bash "$src/install.sh" $install_flags ||
+    die "install.sh failed; nothing further was changed"
 
-  hash_paths <"$paths" >"$after"
-  rm -f "$paths"
-  log ""
-  log "Changed:"
-  report_changes "$before" "$after"
-  rm -f "$before" "$after"
+  if [ -z "${DRY_RUN:-}" ]; then
+    hash_paths <"$paths" >"$after"
+    rm -f "$paths"
+    log ""
+    log "Changed:"
+    report_changes "$before" "$after"
+    rm -f "$before" "$after"
 
-  # The new harness is on disk and the recorded commit moved with it, so the
-  # cached answer is stale by definition.
-  rm -f "$STAMP"
+    # Record hashes of replace-mode files so the next update can detect drift.
+    write_install_hashes "$src"
 
-  log ""
-  log "Ports, mounts and volumes are fixed at container creation — run ./sandbox up"
-  log "to pick up a harness change, and ./sandbox doctor if anything looks off."
+    # The new harness is on disk and the recorded commit moved with it, so the
+    # cached answer is stale by definition.
+    rm -f "$STAMP"
+
+    log ""
+    log "Ports, mounts and volumes are fixed at container creation — run ./sandbox up"
+    log "to pick up a harness change, and ./sandbox doctor if anything looks off."
+  else
+    rm -f "$paths" "$before" "$after"
+  fi
 }
 
 main() {
   local mode="update"
-  REPO_FLAG=""; REF_FLAG=""; FROM=""; FORCE=""
+  REPO_FLAG=""; REF_FLAG=""; FROM=""; FORCE=""; DRY_RUN=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --check) mode="check" ;;
-      --nudge) mode="nudge" ;;
-      --force) FORCE=1 ;;
-      --repo)  REPO_FLAG="${2:-}"; shift ;;
-      --ref)   REF_FLAG="${2:-}"; shift ;;
-      --from)  FROM="${2:-}"; shift ;;
+      --check)    mode="check" ;;
+      --nudge)    mode="nudge" ;;
+      --dry-run)  DRY_RUN=1 ;;
+      --force)    FORCE=1 ;;
+      --repo)     REPO_FLAG="${2:-}"; shift ;;
+      --ref)      REF_FLAG="${2:-}"; shift ;;
+      --from)     FROM="${2:-}"; shift ;;
       -h|--help)
         awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "${BASH_SOURCE[0]}" >&2
         return 0 ;;

@@ -14,6 +14,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
+# shellcheck source=run-args.sh
+. "$SCRIPT_DIR/run-args.sh"
 # shellcheck source=colima.sh
 . "$SCRIPT_DIR/colima.sh"
 
@@ -79,6 +81,39 @@ fi
 grep -qs 'tools/sandbox/.cache' "$REPO_ROOT/.gitignore" \
   && ok ".cache is gitignored" \
   || bad ".cache is NOT gitignored — it holds credentials. Add tools/sandbox/.cache/ to $REPO_ROOT/.gitignore"
+
+if [ -f "$REPO_ROOT/.git" ]; then
+  common="$(sandbox_git_common_dir 2>/dev/null || true)"
+  gitdir_line="$(head -1 "$REPO_ROOT/.git" 2>/dev/null || true)"
+  gitdir="${gitdir_line#gitdir:}"
+  gitdir="$(sandbox_trim "$gitdir")"
+  if [ -z "$common" ]; then
+    bad "linked worktree: .git points at a gitdir boot cannot mount ($gitdir). Git inside the container will fail."
+  elif [ ! -d "$common" ]; then
+    bad "linked worktree: common dir $common is not a directory on the host"
+  else
+    ok "linked worktree; boot will bind $common"
+  fi
+fi
+
+echo "disk"
+df_m=""
+if command -v colima >/dev/null 2>&1; then
+  df_m="$(colima ssh -- df -m / 2>/dev/null | awk 'NR==2{print $4}' || true)"
+fi
+if [ -z "$df_m" ]; then
+  df_m="$(df -m / 2>/dev/null | awk 'NR==2{print $4}' || true)"
+fi
+case "$df_m" in
+  ''|*[!0-9]*) warn "could not read Docker/VM free space" ;;
+  *)
+    if [ "$df_m" -lt 5120 ]; then
+      warn "Docker filesystem has ${df_m}M free — an image rebuild or pnpm install needs multiple GB"
+    else
+      ok "Docker filesystem has ${df_m}M free"
+    fi
+    ;;
+esac
 
 echo "harness"
 # The manifest is what an upgrade deletes by. A `replace` path it claims but the

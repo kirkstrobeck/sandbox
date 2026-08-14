@@ -4,7 +4,7 @@
 #   ./sandbox "add a health check endpoint"   send work to the inner agent
 #   ./sandbox -c "now add a test for it"      continue the same thread
 #   ./sandbox -a claude|codex|cursor "task"   pick the inner agent for one run
-#   ./sandbox -m <model-id> "task"            pick the inner model for one run
+#   ./sandbox -m <model-id> "task"            pin the manager model for one run
 #   ./sandbox result                          re-read the last answer
 #   ./sandbox tail -f                         watch the inner agent work
 #   ./sandbox up                              start the container
@@ -15,6 +15,7 @@
 #   ./sandbox rebuild                         force an image rebuild
 #   ./sandbox stop                            stop the container
 #   ./sandbox test                            run the gate test suite
+#   ./sandbox --file path                  long message, no pipe (the gate denies pipes)
 #   ./sandbox update                          upgrade the harness from upstream
 
 set -uo pipefail
@@ -49,6 +50,26 @@ case "$cmd" in
   # from; sandbox.conf, AGENTS.md and CLAUDE.md are preserved.
   update)  shift; exec bash "$S/update.sh" "$@" ;;
 esac
+
+# A single bare token that is not a known verb is a typo, not a task.
+# `./sandbox down` must not be sent to the inner agent as the prompt "down".
+if [ $# -eq 1 ]; then
+  case "$cmd" in
+    -*) ;;
+    *)
+      printf 'unknown verb: %s\n' "$cmd" >&2
+      case "$cmd" in
+        down) echo "the verb is 'stop'." >&2 ;;
+        start|restart) echo "use './sandbox up' (or stop then up)." >&2 ;;
+        ps|logs) echo "use './sandbox status' or './sandbox tail'." >&2 ;;
+        exec) echo "use './sandbox run' or './sandbox shell'." >&2 ;;
+        kill|destroy|reset|clean) echo "use './sandbox stop'." >&2 ;;
+      esac
+      printf 'to send this as a message, quote a sentence: ./sandbox "%s ..."\n' "$cmd" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 # Anything else is a message for the inner agent. `./sandbox "do the thing"`
 # should just work, without a verb in front of it.

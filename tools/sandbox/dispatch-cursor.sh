@@ -50,6 +50,7 @@ dispatch_cursor() {
     -e "LOG_FILE=$run_dir_ctr/last.jsonl" \
     -e "SESSION_ID=$session_id" \
     -e "SANDBOX_INNER_MODEL=${SANDBOX_INNER_MODEL:-}" \
+    -e "SANDBOX_MODEL_DAILY=${SANDBOX_MODEL_DAILY:-}" \
     "$SANDBOX_NAME" bash -lc '
       msg="$(cat "$MSG_FILE")"
       set -- -p --force --trust --sandbox disabled --output-format stream-json

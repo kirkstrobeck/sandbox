@@ -9,11 +9,12 @@
 #   bash tools/sandbox/dispatch.sh --continue "now fix the failure"
 #   bash tools/sandbox/dispatch.sh --agent cursor "run the test suite"
 #   bash tools/sandbox/dispatch.sh --model gpt-5 "run the test suite"
+#   bash tools/sandbox/dispatch.sh --file msg.txt
 #   bash tools/sandbox/dispatch.sh --result        # re-read the last answer
-#   echo "$LONG_PROMPT" | bash tools/sandbox/dispatch.sh
 #
 # The message travels through a file, never through a shell argument, so quotes,
-# newlines, backticks and $() in a prompt stay literal text.
+# newlines, backticks and $() in a prompt stay literal text. A long message
+# from the outer agent should use --file: the gate denies pipes.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -21,6 +22,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/common.sh"
 # shellcheck source=agent.sh
 . "$SCRIPT_DIR/agent.sh"
+# shellcheck source=model-daily.sh
+. "$SCRIPT_DIR/model-daily.sh"
 # shellcheck source=model.sh
 . "$SCRIPT_DIR/model.sh"
 # shellcheck source=dispatch-claude.sh
@@ -47,6 +50,11 @@ while [ $# -gt 0 ]; do
     -c|--continue) continue_flag="--continue"; shift ;;
     -a|--agent) SANDBOX_AGENT="${2:-}"; shift 2 ;;
     -m|--model) SANDBOX_MODEL="${2:-}"; shift 2 ;;
+    --file|--message-file)
+      [ -n "${2:-}" ] && [ -r "$2" ] || { echo "cannot read message file: ${2:-}" >&2; exit 2; }
+      message="$(cat "$2")"
+      shift 2
+      ;;
     --result) want_result=1; shift ;;
     -h|--help) usage 0 ;;
     --) shift; message="$*"; break ;;
@@ -63,9 +71,13 @@ agent="$(resolve_sandbox_agent noprompt)" || exit 2
 if [ "$want_result" = 1 ]; then
   case "$agent" in
     claude)
+      if [ -f "$RUN_DIR/last.jsonl" ]; then
+        claude_result_from_stream "$RUN_DIR/last.jsonl" "$RUN_DIR/last.err"
+        exit $?
+      fi
       [ -f "$RUN_DIR/last.json" ] || { echo "No previous Claude result." >&2; exit 1; }
-      jq -r '.result // empty' "$RUN_DIR/last.json" 2>/dev/null || cat "$RUN_DIR/last.json"
-      exit 0 ;;
+      claude_result_from_file "$RUN_DIR/last.json" "$RUN_DIR/last.err"
+      exit $? ;;
     codex)
       [ -f "$RUN_DIR/last.txt" ] || { echo "No previous Codex result." >&2; exit 1; }
       cat "$RUN_DIR/last.txt"
@@ -90,8 +102,20 @@ fi
 
 require_agent_credential "$agent" || exit 1
 
-# Same product, same model. Empty means nothing could be read, and no --model
-# flag is passed — the inner CLI uses its own default rather than one we made up.
+# Today's model/plan/promo snapshot, fetched at most once a day for every
+# sandbox on this machine. It stays on the host — the text is handed to the
+# container as an environment variable, never as a mount — and it is what lets
+# the inner manager pick a worker model without spending a web search on it.
+# Empty is fine and is the fail-open answer; nothing downstream requires it. A
+# value already in the environment is somebody overriding today's snapshot on
+# purpose, so it is left alone.
+if [ -z "${SANDBOX_MODEL_DAILY:-}" ]; then
+  SANDBOX_MODEL_DAILY="$(sandbox_model_daily_ensure 2>/dev/null || true)"
+fi
+export SANDBOX_MODEL_DAILY
+
+# The MANAGER model, not the outer one. What runs inside routes and reviews;
+# the worker it spawns does the work at a cheaper tier. See model.sh.
 SANDBOX_INNER_MODEL="$(resolve_sandbox_model "$agent")"
 export SANDBOX_INNER_MODEL
 
@@ -101,11 +125,31 @@ container="$(bash "$SCRIPT_DIR/boot.sh")" || {
 }
 SANDBOX_NAME="$container"
 
+# The image bakes AGENT.md in at build time, so an edit to it would otherwise
+# need a rebuild before the inner agent read a word of it. The bind mount
+# already has the current copy, so refresh the three user-global locations from
+# there on every dispatch. Best effort in every step: an instruction file that
+# could not be copied is the image's slightly older one, which is not worth
+# failing a run over.
+docker exec -u agent -e "HOME=/home/agent" "$SANDBOX_NAME" bash -lc '
+  src="$0"
+  [ -r "$src" ] || exit 0
+  mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules
+  cp -f "$src" /home/agent/.claude/CLAUDE.md
+  cp -f "$src" /home/agent/.codex/AGENTS.md
+  # Cursor learns a user-global rule only through the alwaysApply frontmatter
+  # entrypoint.sh writes, so the same header is rebuilt around the new text.
+  {
+    printf -- "---\ndescription: You are the inner agent inside the sandbox container.\nalwaysApply: true\n---\n\n"
+    cat "$src"
+  } >/home/agent/.cursor/rules/sandbox-inner.mdc
+' "/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/AGENT.md" >/dev/null 2>&1 || true
+
 mkdir -p "$RUN_DIR"
 printf '%s' "$message" >"$RUN_DIR/msg"
 rm -f "$RUN_DIR/last.json" "$RUN_DIR/last.txt" "$RUN_DIR/last.jsonl"
 
-echo "→ $agent (inner)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} ..." >&2
+echo "→ $agent (manager)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} ..." >&2
 
 case "$agent" in
   claude) dispatch_claude "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;

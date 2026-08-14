@@ -9,7 +9,7 @@
 GATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "$GATE_DIR/../.." && pwd -P)"
 
-DISPATCH_MSG='Do not run this on the host. Dispatch the work to the inner agent: bash tools/sandbox/dispatch.sh "<message>" (or --continue for follow-ups). See .claude/skills/sandbox/SKILL.md.'
+DISPATCH_MSG='Do not run this on the host. Dispatch: ./sandbox "<message>" or ./sandbox -c "<message>". See AGENTS.md.'
 
 # Claude Code reads this exact JSON shape from a PreToolUse hook. Exit 0 always:
 # a nonzero exit is a hook *error*, which is not the same thing as a deny and is
@@ -55,4 +55,59 @@ gate_read_payload() {
     allow "jq unavailable; gate cannot evaluate"
   fi
   printf '%s' "$payload"
+}
+
+# Project extra-allow globs, evaluated AFTER named denials. Never source
+# sandbox.conf here — a $(git ...) in that file would fork on every Bash tool
+# call. Env wins (tests); otherwise extract the one assignment from the conf
+# files without executing them.
+_gate_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+gate_extra_allow_patterns() {
+  if [ -n "${SANDBOX_EXTRA_ALLOW:-}" ]; then
+    printf '%s\n' "$SANDBOX_EXTRA_ALLOW"
+    return 0
+  fi
+  local file
+  for file in "$PROJECT_ROOT/tools/sandbox/sandbox.conf" \
+              "$PROJECT_ROOT/tools/sandbox/sandbox.local.conf"; do
+    [ -r "$file" ] || continue
+    awk '
+      $0 ~ /^[[:space:]]*SANDBOX_EXTRA_ALLOW=/ {
+        sub(/^[[:space:]]*SANDBOX_EXTRA_ALLOW=/, "")
+        if ($0 ~ /^"/) {
+          sub(/^"/, "")
+          if ($0 ~ /"$/) { sub(/"$/, ""); print; next }
+          print
+          inq = 1
+          next
+        }
+        print
+      }
+      inq {
+        if ($0 ~ /"$/) { sub(/"$/, ""); print; inq = 0; next }
+        print
+      }
+    ' "$file"
+  done
+}
+
+gate_extra_allow_matches() {
+  local stripped="$1" pat
+  while IFS= read -r pat; do
+    pat="$(_gate_trim "$pat")"
+    [ -z "$pat" ] && continue
+    case "$pat" in \#*) continue ;; esac
+    case "$stripped" in
+      $pat) return 0 ;;
+    esac
+  done <<EOF
+$(gate_extra_allow_patterns)
+EOF
+  return 1
 }

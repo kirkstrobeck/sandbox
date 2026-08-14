@@ -3,6 +3,56 @@
 # common.sh. Kept apart from boot.sh so the mount layout can be read — and
 # argued with — without wading through lifecycle logic.
 
+# Linked worktrees store an absolute host gitdir in a `.git` *file*. Binding
+# only the worktree leaves that path empty inside the container, and every git
+# command fails. Read the pointer file on the host — never fork git from the
+# gate, and never put $(git ...) in sandbox.conf.
+sandbox_git_common_dir() {
+  local git_entry="$REPO_ROOT/.git"
+  [ -f "$git_entry" ] || return 0
+  local gitdir_line gitdir common
+  gitdir_line="$(head -1 "$git_entry" 2>/dev/null)"
+  case "$gitdir_line" in
+    gitdir:*) ;;
+    *) return 0 ;;
+  esac
+  gitdir="${gitdir_line#gitdir:}"
+  gitdir="$(sandbox_trim "$gitdir")"
+  case "$gitdir" in
+    /*) ;;
+    *) gitdir="$REPO_ROOT/$gitdir" ;;
+  esac
+  # gitdir is .git/worktrees/<name>; the common dir is two levels up.
+  common="$(cd "$gitdir/../.." 2>/dev/null && pwd -P)" || return 0
+  case "$common" in
+    "$REPO_ROOT"|"$REPO_ROOT"/*) return 0 ;;
+  esac
+  printf '%s\n' "$common"
+}
+
+sandbox_worktree_mount_args() {
+  local common
+  common="$(sandbox_git_common_dir)"
+  [ -z "$common" ] && return 0
+  printf '%s\n' -v "$common:$common:rw"
+}
+
+sandbox_extra_mount_args() {
+  local spec host dest mode rest
+  while IFS= read -r spec; do
+    [ -z "$spec" ] && continue
+    host="${spec%%:*}"
+    rest="${spec#*:}"
+    case "$rest" in
+      *:*) dest="${rest%:*}" ; mode="${rest##*:}" ;;
+      *)   dest="$rest" ; mode="rw" ;;
+    esac
+    case "$mode" in rw|ro) ;; *) mode="rw" ;; esac
+    [ -n "$host" ] && [ -n "$dest" ] || continue
+    printf '%s\n' -v "$host:$dest:$mode"
+  done < <(sandbox_lines "${SANDBOX_EXTRA_MOUNTS:-}")
+}
+
 # Mount the repo at BOTH /workspace and its real host path.
 #
 # The container shares the host's Docker socket, so when the inner agent starts
@@ -19,6 +69,8 @@ sandbox_mount_args() {
     -v "$CACHE_DIR/cursor-home:/home/agent/.config/cursor" \
     -v "$CACHE_DIR/gh:/home/agent/.config/gh" \
     -v "$CACHE_DIR/claude.json:/home/agent/.claude.json"
+  sandbox_worktree_mount_args
+  sandbox_extra_mount_args
 
   # The socket, so the inner agent can start sibling containers.
   #
@@ -185,12 +237,31 @@ sandbox_env_args() {
   email="$(git -C "$REPO_ROOT" config user.email 2>/dev/null || true)"
   [ -n "$name" ] && printf '%s\n' -e "HOST_GIT_NAME=$name"
   [ -n "$email" ] && printf '%s\n' -e "HOST_GIT_EMAIL=$email"
+
+  local entry
+  while IFS= read -r entry; do
+    [ -z "$entry" ] && continue
+    printf '%s\n' -e "$entry"
+  done < <(sandbox_lines "${SANDBOX_EXTRA_ENV:-}")
+}
+
+# Fingerprint the shape of what docker run will be called with, for
+# container_is_current in boot.sh. Does not include remapped host ports.
+sandbox_config_fingerprint() {
+  {
+    sandbox_mount_args
+    sandbox_env_args
+    sandbox_list "$SANDBOX_VOLUME_DIRS"
+    sandbox_list "$SANDBOX_PORTS"
+    printf '%s\n' "$SANDBOX_STACK"
+  } | shasum | cut -c1-40
 }
 
 sandbox_run_args() {
   printf '%s\n' \
     --name "$SANDBOX_NAME" \
     --label "sandbox.project=$SANDBOX_PROJECT" \
+    --label "sandbox.config-fp=$(sandbox_config_fingerprint 2>/dev/null || true)" \
     -w /workspace \
     --add-host "host.docker.internal:host-gateway"
   sandbox_mount_args

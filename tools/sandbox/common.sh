@@ -45,6 +45,31 @@ sandbox_require_docker() {
 }
 
 # Space/newline separated config lists -> one item per line, blanks dropped.
+# Word-splits on purpose: SANDBOX_PORTS and SANDBOX_VOLUME_DIRS are written as
+# words. Paths that may contain spaces belong in SANDBOX_EXTRA_MOUNTS and must
+# go through sandbox_lines instead.
 sandbox_list() {
   printf '%s\n' $1
+}
+
+# Trim ASCII whitespace from both ends of one line.
+sandbox_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# Newline-delimited config lists -> one item per line. Blanks and comments
+# dropped. No word-splitting: safe for paths that contain spaces.
+sandbox_lines() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(sandbox_trim "$line")"
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
+    printf '%s\n' "$line"
+  done <<EOF
+${1:-}
+EOF
 }

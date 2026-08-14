@@ -48,6 +48,23 @@ prepare_cache() {
   # starts or Docker creates a directory in its place.
   [ -f "$CACHE_DIR/claude.json" ] || printf '{}\n' >"$CACHE_DIR/claude.json"
 
+  # Seed trust so the inner Claude doesn't stop on a trust dialog.
+  # The container is the trust boundary; inner permission prompts are redundant.
+  local cj="$CACHE_DIR/claude.json"
+  local tmp
+  tmp="$(mktemp "$cj.XXXXXX")"
+  if jq --arg r "$REPO_ROOT" \
+       '.projects |= (. // {}) |
+        .projects["/workspace"] |= (. // {}) |
+        .projects["/workspace"].hasTrustDialogAccepted = true |
+        .projects[$r] |= (. // {}) |
+        .projects[$r].hasTrustDialogAccepted = true' \
+       "$cj" >"$tmp" 2>/dev/null; then
+    mv "$tmp" "$cj"
+  else
+    rm -f "$tmp"
+  fi
+
   bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged."
   bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged."
   bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged."
@@ -91,6 +108,13 @@ container_is_current() {
     docker inspect -f '{{json .HostConfig.PortBindings}}' "$SANDBOX_NAME" 2>/dev/null |
       grep -q "\"$container_port/tcp\"" || return 1
   done < <(sandbox_list "$SANDBOX_PORTS")
+
+  # Config fingerprint: mount args + env args + stack + ports + volume dirs.
+  # Stored as a label at run time; mismatch means the config changed.
+  local want_fp running_fp
+  want_fp="$(sandbox_config_fingerprint 2>/dev/null || true)"
+  running_fp="$(docker inspect -f '{{index .Config.Labels "sandbox.config-fp"}}' "$SANDBOX_NAME" 2>/dev/null || true)"
+  [ -z "$want_fp" ] || [ "$want_fp" = "$running_fp" ] || return 1
 
   return 0
 }

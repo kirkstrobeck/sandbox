@@ -58,11 +58,23 @@ The mount layout is deliberately kept in one readable file,
 | Docker socket | `SANDBOX_DOCKER_SOCK` (default `/var/run/docker.sock`) → `/var/run/docker.sock` | read-write | **Mounted whenever the daemon answers `docker info`.** See below. |
 | Published ports | `SANDBOX_PORTS`, default `127.0.0.1:3000:3000` | — | The address half decides who on your network can reach the container. |
 | Build/dep dirs | Named volumes over `SANDBOX_VOLUME_DIRS` | read-write | Container-private; they shadow the bind mount, so writes there do not reach the Mac. |
+| Daily model snapshot | `$TMPDIR/sandbox-model-daily` on the host → `SANDBOX_MODEL_DAILY` environment variable | **not a mount** — text only, one way in | A few KB of public product-page text so the inner manager can pick a worker model without a web search. **The inner agent does not see that path**, or any of `$TMPDIR`. It holds no credentials and nothing project-specific. |
+| Linked worktree git common dir | When `.git` is a pointer file, the common dir (`parent/.git`) is mounted at its literal host path | read-write | Same trust level as the worktree itself; required for git to work inside a linked worktree. The mount is detected from the pointer file — never from a `git` command. |
+| `SANDBOX_EXTRA_MOUNTS` | Whatever the project lists in `sandbox.conf` | as declared (`rw` or `ro`) | Explicit project capability. Listed in `sandbox.conf`, so the fingerprint recreates the container on change and `./sandbox doctor` can report them. |
+| `SANDBOX_EXTRA_ENV` | Key=value pairs listed in `sandbox.conf` | env variable only — not a mount | Passes project-specific configuration into the container without creating a filesystem path. Same clobber rule as extra mounts: append, do not reassign. |
 
 What is **not** mounted: your home directory, your SSH keys, your other repos,
-your shell history, your cloud credentials. Nothing under `~/.ssh` is ever
-touched — see [docs/credentials.md](credentials.md) for why a revocable token is
-the deliberate choice over a key.
+your shell history, your cloud credentials, and your `$TMPDIR`. Nothing under
+`~/.ssh` is ever touched — see [docs/credentials.md](credentials.md) for why a
+revocable token is the deliberate choice over a key.
+
+**The daily snapshot is a host-side write, not an inner capability.** The host
+harness fetches it (`tools/sandbox/model-daily.sh`), the host harness owns the
+file, and only the resulting text crosses into the run as an environment
+variable — the same shape as the update-check stamp in `.cache/`. Mounting that
+path to save the copy would hand the inner agent a writable host location
+outside the repo in exchange for nothing. If a future change adds such a mount,
+the design has been lost, not optimized.
 
 **The Docker socket is not optional in the current code.** `sandbox_mount_args`
 mounts it if `docker info` succeeds; `SANDBOX_DOCKER_SOCK` changes *which*
@@ -94,8 +106,10 @@ nothing is watching."
 | Docker socket (current default when a daemon answers) | Sibling containers: databases, test services | Understand it as daemon control. Only run this pointed at a daemon you would hand over anyway; prefer a project-scoped Colima VM over a daemon shared with production tooling |
 | Ports on `127.0.0.1` | Browser on your Mac reaches the dev server | None needed — this is the default |
 | Ports on `0.0.0.0` or a LAN address | Phone or coworker reaches the dev server | Trust the network you are on. Anything the agent starts is now reachable by everyone on it |
+| Extra mounts (`SANDBOX_EXTRA_MOUNTS`) | Inner agent reaches additional host paths (secrets dirs, shared caches) | Listed in `sandbox.conf`; fingerprint recreates container on change; `./sandbox doctor` reports them; prefer `ro` for secrets |
 | Dispatching text you did not write (issue bodies, PR comments, scraped pages) | Automation | Treat it as untrusted input, because it is. Do not do this with a push token bridged. See prompt injection below |
 | Unattended or scheduled runs | Throughput | Everything above compounds: no human is reading the diff, so the token scope *is* the control |
+| A daily snapshot file in your `$TMPDIR` | The inner manager picks a cheap worker model without spending a web search on it | Host-side only. It stays out of the mount list, it holds public text and no credentials, and it is `chmod 600`. Passing it in as an environment variable is the control — mounting it would trade a real boundary for a copy |
 
 Reading the table one way: the lowest-footprint setup is Claude Code outside
 with both gates wired, no GitHub token bridged, ports on loopback, a daemon you
@@ -120,6 +134,7 @@ them is defensible without adding controls that are not in the box.
 | Separate credential homes | mount layout | Anthropic, OpenAI and Cursor tokens live in different directories, so a mount that needs one does not carry all three |
 | `.git/config` left alone | `entrypoint.sh` | Container git settings go in `~/.gitconfig`. `.git/config` is inside the bind mount and is the Mac's file |
 | Loopback ports by default | `sandbox.conf` | `SANDBOX_PORTS="127.0.0.1:3000:3000"` |
+| Daily snapshot stays host-side | [`model-daily.sh`](../tools/sandbox/model-daily.sh) | Written on the host, `chmod 600`, `mktemp` + `mv`, no history, no credentials in it. It is **not** in `run-args.sh` — the text crosses as one environment variable and the path does not cross at all |
 | Hook wiring check | `./sandbox doctor` | Warns when `.claude/settings.json` does not reference `outer-gate.sh` — i.e. when the outer agent can still act on the host |
 
 Details: [docs/agents.md](agents.md) for the gates and the client-by-client
@@ -196,6 +211,11 @@ the moment capability grows without the tables growing.
       → update the controls table, add cases to `gate-test.sh`, and re-run
       `./sandbox test`
 - [ ] Changes **install or update** fetching → revisit the supply-chain row
+- [ ] Adds a **host-side file the harness writes or fetches** outside the
+      project (the update-check stamp, the daily model snapshot) → say where it
+      lives, what is in it, and that it is not mounted. If you find yourself
+      mounting one to make it easier to read, stop: the text can be passed in
+      as an environment variable, and that is why these are not capabilities
 - [ ] Removes a control → delete the row here rather than leaving a control
       documented that no longer runs
 

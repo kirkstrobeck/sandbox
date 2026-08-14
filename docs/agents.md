@@ -142,10 +142,10 @@ Cursor run, the same as for Codex.
 ## Which agent runs inside
 
 **The inner agent is the same product as the outer one.** Not because the three
-are interchangeable, but because they are not: the two halves share a repo, a
-task and a model, and a Codex outer handing work to a Claude inner means the
-agent that wrote the dispatch and the agent that reads it disagree about their
-own conventions.
+are interchangeable, but because they are not: the two halves share a repo and a
+task, and a Codex outer handing work to a Claude inner means the agent that
+wrote the dispatch and the agent that reads it disagree about their own
+conventions. They do *not* share a model — see below.
 
 Nobody is asked. The outer client leaves fingerprints in the environment of
 every command it runs, and `tools/sandbox/agent.sh` reads them:
@@ -180,42 +180,102 @@ that agent's credential before the container starts, so a missing login fails on
 the Mac with the command that fixes it instead of failing later inside the
 container. See [credentials.md](credentials.md).
 
-## Which model runs inside
+## A manager inside, workers under it
 
-The other half of "same product": where the outer model can be read, the inner
-run gets the same id. An outer agent on a big model writing a dispatch for an
-inner agent on a small one is a bad surprise in exactly one direction, and it is
-invisible in the transcript.
+The inner run is not one agent doing the task. It is a **manager**, and the
+manager spawns **workers**.
+
+The manager reads enough of the repo to write a short spec, spawns a worker on a
+cheaper model to make the edits and run the tests, reviews what came back, and
+retries or accepts. It does not sit in the repo with editor tools open. The
+point is narrow and it is about money: routing and reviewing need judgement,
+typing does not, and paying the judgement rate for the typing is the default
+that this design exists to break.
+
+Two rules come with it, both in `tools/sandbox/AGENT.md`, which is the manager's
+prompt:
+
+- **Tokens build scripts; only scripts do work.** Tokens are not allowed to do
+  the work directly. They build scripts; those scripts do the work and stay in
+  the project tree.
+- **Work products live in the worktree.** Committable, visible on the Mac. Not
+  in `tools/sandbox/.cache`, not in `/tmp`, not in the container's home.
+
+The outer agent does not steer any of this. It does not pick models, name
+workers, or split the job.
+
+## Which model the manager runs
 
 `tools/sandbox/model.sh` resolves it, in order:
 
 1. `SANDBOX_MODEL`, or `./sandbox -m <id>` for one run. Wins over everything.
-2. The outer client's own setting:
+2. A non-empty `<agent>_manager=` line in the daily snapshot — see below.
+3. `SANDBOX_DEFAULT_MODEL` from `sandbox.conf` — a project-wide manager pin.
+4. A high-value default per agent:
 
-   | Agent | Read from | Passed as |
+   | Agent | Manager default | Passed as |
    | --- | --- | --- |
-   | Claude | `ANTHROPIC_MODEL` (or `CLAUDE_MODEL`) | `claude -p --model <id>` |
-   | Codex | `CODEX_MODEL`, else top-level `model =` in `~/.codex/config.toml` | `codex exec --model <id>` |
-   | Cursor | `CURSOR_MODEL`, else `model` in Cursor's `cli-config.json` | `agent --model <id>` |
+   | Claude | `claude-sonnet-4-6` | `claude -p --model <id>` |
+   | Codex | `gpt-5.3-codex` | `codex exec --model <id>` |
+   | Cursor | `cursor-grok-4.6-high` | `agent --model <id>` |
 
-3. `SANDBOX_DEFAULT_MODEL` from `sandbox.conf` — a project-wide pin.
-4. **Nothing.** No `--model` flag is passed and the inner CLI uses its own
-   default.
+**The outer client's model is deliberately not copied.** This file used to do
+exactly that, and it is the wrong answer for a manager in both directions: an
+outer agent on a small fast model would hand the container a manager that cannot
+review, and an outer agent on the flagship would bill every routing decision at
+flagship rates. The two halves have different jobs now, so they get different
+models.
 
-Step 4 is deliberate and it is the common case. None of the three clients
-exports "the model I am currently running"; the closest each has is a setting
-the human chose, and if they did not choose one there is nothing to read.
-Inventing an id there would pin a model nobody asked for, which is worse than
-the CLI's own default being used. The dispatch line says which way it went:
+The defaults in step 4 are chosen to be high enough to route and review, and
+deliberately not a fast/mini/haiku/composer tier — that is what the workers are
+for. They are handed to the CLI verbatim, so they have to be ids that agent
+understands; when one goes stale, `_sandbox_manager_fallback` in `model.sh` is
+the single place to change it. `./sandbox -m gpt-5` against a Claude inner fails
+inside the container, not on the Mac.
+
+The dispatch line names the role, so a run that was pinned is visible:
 
 ```
-→ cursor (inner) · gpt-5 ...
-→ claude (inner) ...              # nothing readable; inner default
+→ cursor (manager) · cursor-grok-4.6-high ...
+→ claude (manager) · claude-sonnet-4-6 ...
 ```
 
-The id is passed through verbatim, so it has to be one that agent understands —
-`./sandbox -m gpt-5` against a Claude inner fails inside the container, not on
-the Mac.
+## The daily snapshot
+
+The manager has to pick a worker model, and plans, tiers and promos move. Making
+it web-search that on every dispatch would spend the expensive tokens on a
+lookup whose answer does not change hour to hour.
+
+So `tools/sandbox/model-daily.sh` does it **on the host**, at most once every 24
+hours, once for every sandbox on the machine:
+
+| | |
+| --- | --- |
+| Where | `$TMPDIR/sandbox-model-daily`, override with `SANDBOX_MODEL_DAILY_FILE` |
+| When | Only if missing or older than `SANDBOX_MODEL_DAILY_MAX_AGE` (86400s). Read first, always |
+| What | Public sources — Anthropic news and pricing, the Cursor changelog, the GitHub Codex releases atom and the npm `@openai/codex` latest document — crudely tag-stripped, filtered to lines mentioning a model, a price or a promo |
+| Shape | `fetched_at`, `fetched_at_iso`, `status=ok\|unavailable`, `<agent>_manager=` lines, then per-product notes. No history, `chmod 600`, written `mktemp` + `mv` |
+| How it gets in | `dispatch.sh` exports the text as `SANDBOX_MODEL_DAILY` and each backend passes it to `docker exec -e`. **Not a mount** |
+
+It fails open at every step. No `curl`, a dead page, a redesign that makes the
+digest empty: the file is still written, with `status=unavailable` and a
+timestamp, so a broken network costs one attempt a day instead of one attempt
+per dispatch. `SANDBOX_MODEL_DAILY_FETCH_CMD` replaces `curl` with any command
+that prints a page for a URL, which is how `model-daily-test.sh` runs the whole
+thing with no network at all.
+
+**The `<agent>_manager=` lines are normally empty, and that is intended.** The
+fetcher does not try to infer a model id out of marketing prose: a guessed id
+fails inside the container minutes later, which is worse than the default in
+`model.sh`. The keys are there for a human, or a future source that publishes
+real ids, to fill in. What the snapshot is actually for is the manager reading
+it — one env var instead of a web search.
+
+Nothing about it is mounted, and it must stay that way. The container does not
+see `$TMPDIR`; it sees an environment variable holding today's text. That is the
+whole reason this is a host-side write analogous to the update-check stamp
+rather than a new hole in the boundary — see
+[docs/security.md](security.md).
 
 ## Inside the container
 
@@ -223,7 +283,11 @@ The inner agent gets its own instructions: `tools/sandbox/AGENT.md` is baked int
 the image and copied by `entrypoint.sh` to each agent's user-global location —
 `/home/agent/.claude/CLAUDE.md`, `/home/agent/.codex/AGENTS.md`, and
 `/home/agent/.cursor/rules/sandbox-inner.mdc` with `alwaysApply: true` — so
-whichever one runs finds them. They say to do the whole task, that
+whichever one runs finds them. `dispatch.sh` then recopies all three from the
+bind-mounted `tools/sandbox/AGENT.md` before every run, best effort, so an edit
+to the manager's prompt takes effect on the next dispatch instead of waiting for
+an image rebuild. They say that the run is a manager and the work goes to
+workers, that tokens build scripts and only scripts do work, that
 `tools/sandbox/*.sh` are host-side scripts it must not run — dispatching from
 inside is an agent calling itself — and to always pass `git commit -m`, since
 the container's editor is `/bin/false` and a bare commit fails fast rather than
@@ -260,5 +324,45 @@ case in test/parse.test.ts:44. Fix the parser, run 'pnpm test', and commit with 
 message describing the fix.`
 
 You are allowed to read the repo on the host, and you should. A dispatch built
-on a guess costs a full run to discover it was wrong. For a long message, stdin
-beats an argument: `printf '%s' "$LONG" | ./sandbox`.
+on a guess costs a full run to discover it was wrong. For a long message, write
+to a file and pass `--file`:
+
+```bash
+./sandbox --file /path/to/task.md
+```
+
+Piping is denied by the outer gate — `printf '%s' "$LONG" | ./sandbox` will be
+blocked with "pipe denied". `DISPATCH_MSG` is set to the message text by the
+gate, but write it to a file in the worktree rather than relying on that.
+
+## Unknown single-token verbs
+
+A single bare token that is not a known verb is rejected immediately — `./sandbox
+down` exits 2 with `unknown verb: down`, rather than sending "down" to the inner
+agent as a task. The common mistakes are called out:
+
+| You typed | The verb is |
+| --- | --- |
+| `down` | `stop` |
+| `start`, `restart` | `up` (or stop then up) |
+| `ps`, `logs` | `status` or `tail` |
+| `exec` | `run` or `shell` |
+| `kill`, `destroy`, `reset`, `clean` | `stop` |
+
+To dispatch a single word as a task, quote it: `./sandbox "down the service"`.
+
+## Secrets
+
+Do not ask the outer agent to read secrets from the host — anything it reads
+ends up in a transcript. Instead, declare a read-only secrets mount in
+`sandbox.conf` with `SANDBOX_EXTRA_MOUNTS`:
+
+```bash
+SANDBOX_EXTRA_MOUNTS="
+/path/to/my-secrets:/secrets:ro
+"
+```
+
+The grant lives only in the container and disappears when the container is
+removed. See [configuration.md](configuration.md) for the full `SANDBOX_EXTRA_MOUNTS`
+documentation and security notes.

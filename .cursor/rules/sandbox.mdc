@@ -14,8 +14,13 @@ host, and do not edit project files directly. Relay the work:
 
 Full rules: `AGENTS.md` at the repo root.
 
-A dispatch from here runs Cursor inside the container too — same product, same
-model — so `./sandbox "task"` needs no extra flags.
+A dispatch from here runs Cursor inside the container too — same product, but
+not the same model. What starts inside is a manager on a model chosen to route
+and review, and it spawns cheaper workers to do the edits and the tests. The
+harness picks the manager (`SANDBOX_MODEL_DAILY`, a once-a-day snapshot the host
+takes and passes in as an environment variable — not a new mount), and the
+manager picks the workers. `./sandbox "task"` needs no extra flags; `-m <id>`
+pins the manager for one run when the human asks for it.
 
 Cursor does not enforce this the way Claude Code does — the PreToolUse hooks in
 `.claude/settings.json` are a Claude Code feature and they do not run here. In

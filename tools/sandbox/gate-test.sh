@@ -145,6 +145,68 @@ inner="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
 check "bash: git push (SANDBOX_INNER=1)" allow "$(decision_of "$inner")"
 
 echo
+echo "Bash gate — project extra allow is after named denials"
+bash_case deny  'bash tools/dev-start.sh --foo'
+out="$(jq -nc --arg c 'bash tools/dev-start.sh --foo' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_ALLOW='bash tools/dev-start.sh*' bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: extra-allow project script" allow "$(decision_of "$out")"
+out="$(jq -nc --arg c 'git status' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_ALLOW='git*' bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: extra-allow cannot grant git" deny "$(decision_of "$out")"
+out="$(jq -nc --arg c 'pnpm install' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_ALLOW='pnpm *' bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: extra-allow cannot grant pnpm" deny "$(decision_of "$out")"
+out="$(jq -nc --arg c 'rm -rf build' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_ALLOW='rm *' bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: extra-allow cannot grant rm" deny "$(decision_of "$out")"
+bash_case allow './sandbox --file tools/sandbox/sandbox.conf'
+bash_case deny  'printf %s x | ./sandbox'
+
+echo
+echo "CLI — unknown single-token verbs"
+cli_rc=0
+cli_out="$(bash "$PROJECT_ROOT/sandbox" down 2>&1)" || cli_rc=$?
+check "cli: ./sandbox down exits 2" 2 "$cli_rc"
+check "cli: ./sandbox down names the verb" unknown \
+  "$(printf '%s' "$cli_out" | grep -q 'unknown verb: down' && echo unknown || echo other)"
+
+echo
+echo "Claude result extraction — success is not an envelope dump"
+# shellcheck source=dispatch-claude.sh
+. "$SCRIPT_DIR/dispatch-claude.sh"
+_ext_dir="$(mktemp -d)"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"hello from inner"}' >"$_ext_dir/ok.jsonl"
+ext_out="$(claude_result_from_stream "$_ext_dir/ok.jsonl")"; ext_rc=$?
+check "claude stream: success prints result" "hello from inner" "$ext_out"
+check "claude stream: success exit 0" 0 "$ext_rc"
+printf '%s\n' '{"is_error":false,"subtype":"success","result":""}' >"$_ext_dir/empty.json"
+ext_out="$(claude_result_from_file "$_ext_dir/empty.json")"; ext_rc=$?
+check "claude json: empty success is exit 0" 0 "$ext_rc"
+check "claude json: empty success does not dump envelope" nodump \
+  "$(printf '%s' "$ext_out" | grep -q is_error && echo dump || echo nodump)"
+rm -rf "$_ext_dir"
+
+echo
+echo "Worktree pointer — common dir is outside the repo"
+_wt="$(mktemp -d)"
+mkdir -p "$_wt/parent/.git/worktrees/leaf" "$_wt/leaf"
+printf 'gitdir: %s\n' "$_wt/parent/.git/worktrees/leaf" >"$_wt/leaf/.git"
+_wt_got="$(
+  # shellcheck source=common.sh
+  . "$SCRIPT_DIR/common.sh"
+  # shellcheck source=run-args.sh
+  . "$SCRIPT_DIR/run-args.sh"
+  REPO_ROOT="$_wt/leaf"
+  sandbox_git_common_dir
+)"
+check "worktree: common dir resolves" "$(cd "$_wt/parent/.git" && pwd -P)" "$_wt_got"
+rm -rf "$_wt"
+
+echo
 echo "Manifest — every path install claims to own is really here"
 # The gates are not the only thing that fails silently. A MANIFEST that lists a
 # file the tree does not have installs a project into a state where the next
@@ -176,7 +238,8 @@ else
   done <<EOF
 $(cd "$PROJECT_ROOT" && find tools/sandbox -type f \
     ! -path 'tools/sandbox/.cache/*' \
-    ! -name 'sandbox.local.conf' ! -name 'sandbox.conf.new' ! -name 'ORIGIN.md' 2>/dev/null | sort)
+    ! -name 'sandbox.local.conf' ! -name 'sandbox.conf.new' ! -name 'ORIGIN.md' \
+    ! -name '.install-hashes' 2>/dev/null | sort)
 EOF
   if [ -z "$unlisted" ]; then
     check "manifest: no harness file is missing from it" complete complete
@@ -184,6 +247,32 @@ EOF
     check "manifest: no harness file is missing from it" complete "unlisted$unlisted"
   fi
 fi
+
+# The daily model snapshot and the manager-model resolution that reads it. It
+# shares check/pass/fail rather than running as a subprocess, so `./sandbox test`
+# reports one honest number for the whole harness instead of two.
+# shellcheck source=model-daily-test.sh
+. "$SCRIPT_DIR/model-daily-test.sh"
+
+echo
+echo "install.sh — dry-run does not change files; no --force refuses foreign files"
+_itmp="$(mktemp -d)"
+mkdir -p "$_itmp/tools/sandbox"
+printf '#!/usr/bin/env bash\necho hi\n' >"$_itmp/tools/sandbox/my-project-script.sh"
+# dry-run against this repo (SRC=PROJECT_ROOT since install.sh is next to tools/sandbox)
+_irc=0
+SANDBOX_TARGET="$_itmp" bash "$PROJECT_ROOT/install.sh" --dry-run 2>/dev/null || _irc=$?
+check "install: dry-run exits 0" 0 "$_irc"
+check "install: dry-run keeps foreign file" present \
+  "$([ -f "$_itmp/tools/sandbox/my-project-script.sh" ] && echo present || echo gone)"
+# without --force: must refuse (nonzero) because of the foreign file
+_irc2=0
+SANDBOX_TARGET="$_itmp" bash "$PROJECT_ROOT/install.sh" 2>/dev/null || _irc2=$?
+check "install: refuses foreign file without --force" nonzero \
+  "$([ "$_irc2" -ne 0 ] && echo nonzero || echo zero)"
+check "install: foreign file present after refusal" present \
+  "$([ -f "$_itmp/tools/sandbox/my-project-script.sh" ] && echo present || echo gone)"
+rm -rf "$_itmp"
 
 echo
 printf '%s passed, %s failed\n' "$pass" "$fail"

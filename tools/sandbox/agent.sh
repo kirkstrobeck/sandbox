@@ -4,9 +4,13 @@
 # The rule is: the inner agent is the SAME PRODUCT as the outer one. A Claude
 # Code outer gets a Claude inner, Codex gets Codex, Cursor gets Cursor. Not
 # because the products are interchangeable, but because they are not — the two
-# halves share a repo, a task, and (see model.sh) a model, and a Codex outer
-# handing work to a Claude inner means the agent that wrote the dispatch and the
-# agent that reads it disagree about their own conventions.
+# halves share a repo and a task, and a Codex outer handing work to a Claude
+# inner means the agent that wrote the dispatch and the agent that reads it
+# disagree about their own conventions.
+#
+# Same product, NOT the same model. What runs inside is a manager that spawns
+# cheaper workers, and model.sh picks its model on those terms rather than
+# copying whatever the outer client happens to be running.
 #
 # Nobody is asked. The outer client leaves its fingerprints in the environment
 # of every command it runs, and that is what gets read.

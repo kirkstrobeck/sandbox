@@ -116,4 +116,9 @@ if [ "$first" = "curl" ]; then
   deny "curl to a non-loopback address belongs to the inner agent. $DISPATCH_MSG"
 fi
 
+# After named denials, never before: a project cannot hand outer back git/pnpm/rm.
+if gate_extra_allow_matches "$stripped"; then
+  allow_unchained "project extra allow"
+fi
+
 deny "$DISPATCH_MSG"
