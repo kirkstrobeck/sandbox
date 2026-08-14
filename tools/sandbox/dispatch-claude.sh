@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Claude Code backend for dispatch.sh. Source, don't run.
 #
-# `--verbose --dangerously-skip-permissions` is the entire point of the container: inside
+# `--dangerously-skip-permissions` is the entire point of the container: inside
 # a throwaway box with one repo bind-mounted, there is no human to ask and
 # nothing outside to damage, so asking is pure friction. Running that flag on
 # the Mac would be a different thing entirely, which is what the gates prevent.
+#
+# `--verbose` is required by the Claude CLI when `-p --output-format stream-json`
+# is used — without it the CLI refuses to run in print mode.
 
 dispatch_claude() {
   local continue_flag="$1" run_dir_host="$2" run_dir_ctr="$3"
