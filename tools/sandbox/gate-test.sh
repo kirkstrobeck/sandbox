@@ -254,6 +254,10 @@ fi
 # shellcheck source=model-daily-test.sh
 . "$SCRIPT_DIR/model-daily-test.sh"
 
+# Latency-cut additions: sandbox_now_ms, stamp-fresh, github cache, bridge skip.
+# shellcheck source=bench-test.sh
+. "$SCRIPT_DIR/bench-test.sh"
+
 echo
 echo "install.sh — dry-run does not change files; no --force refuses foreign files"
 _itmp="$(mktemp -d)"

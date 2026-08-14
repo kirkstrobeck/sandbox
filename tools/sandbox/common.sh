@@ -73,3 +73,24 @@ sandbox_lines() {
 ${1:-}
 EOF
 }
+
+# Milliseconds since epoch. Uses perl for sub-second precision (date +%s%N is
+# Linux-only; macOS/BSD date lacks %N). Falls back to whole seconds.
+sandbox_now_ms() {
+  perl -MTime::HiRes=time -e 'printf "%d\n", int(time() * 1000)' 2>/dev/null ||
+    printf '%s000\n' "$(date +%s)"
+}
+
+# True when a stamp file exists and is less than $2 seconds old (default 60).
+sandbox_stamp_fresh() {
+  [ -f "$1" ] || return 1
+  local age
+  age="$(perl -e 'print int(time() - (stat($ARGV[0]))[9])' "$1" 2>/dev/null || printf '99999\n')"
+  [ "$age" -lt "${2:-60}" ]
+}
+
+# Emit a timing line to stderr when SANDBOX_TIMING=1. Args: label start_ms end_ms.
+sandbox_timing() {
+  [ "${SANDBOX_TIMING:-0}" = "1" ] || return 0
+  printf 'timing: %s %dms\n' "$1" "$(( $3 - $2 ))" >&2
+}

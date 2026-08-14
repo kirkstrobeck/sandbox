@@ -117,6 +117,7 @@ new one and removes what the harness stopped shipping; your `sandbox.conf`,
 | `./sandbox run <cmd>` \| `shell` | Run one command, or get a shell, inside it. |
 | `./sandbox doctor` | Check the host. Changes nothing. |
 | `./sandbox test` | Gate and manifest test suite. |
+| `./sandbox bench` | Time a canonical dispatch (writes `foo.md`) and print ms. |
 | `./sandbox update` | Pull a newer harness into this project. |
 
 A single bare token that is not a known verb is an error, not a task — `./sandbox

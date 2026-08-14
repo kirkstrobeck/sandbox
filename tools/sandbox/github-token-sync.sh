@@ -15,6 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 GH_DIR="${SANDBOX_GH_DIR:-$SCRIPT_DIR/.cache/gh}"
 HOSTS_FILE="$GH_DIR/hosts.yml"
+TOKEN_HASH_FILE="$GH_DIR/.token-hash"
 
 quiet=0
 [ "${1:-}" = "--quiet" ] && quiet=1
@@ -66,6 +67,30 @@ write_hosts() {
   mv -f "$tmp" "$HOSTS_FILE"
 }
 
+# Hash the token for cache-key comparison — never printed, only compared.
+token_hash() {
+  printf '%s' "$1" | sha256sum 2>/dev/null | awk '{print $1}' ||
+    printf '%s' "$1" | md5sum 2>/dev/null | awk '{print $1}' ||
+    printf 'fallback\n'
+}
+
+# True when hosts.yml is fresh (< 15 min) and the stored token hash matches.
+# Skips the network call to gh api user.
+login_cache_valid() {
+  local token="$1"
+  [ -f "$HOSTS_FILE" ] || return 1
+  [ -f "$TOKEN_HASH_FILE" ] || return 1
+  local age
+  age="$(perl -e 'print int(time() - (stat($ARGV[0]))[9])' "$HOSTS_FILE" 2>/dev/null || printf '99999\n')"
+  [ "$age" -lt 900 ] 2>/dev/null || return 1
+  [ "$(token_hash "$token")" = "$(cat "$TOKEN_HASH_FILE" 2>/dev/null || true)" ]
+}
+
+# Extract the stored login from the existing hosts.yml (never calls gh).
+read_cached_login() {
+  grep '^ *user: ' "$HOSTS_FILE" 2>/dev/null | awk '{print $2}' | tail -1
+}
+
 token="$(read_token)"
 if [ -z "$token" ]; then
   say "No GitHub token on the host. Run 'gh auth login' (or export GH_TOKEN)."
@@ -79,11 +104,22 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-login="$(resolve_login "$token")"
-if [ -z "$login" ]; then
-  say "The host GitHub token was rejected by the API. Run 'gh auth login' again."
-  exit 1
+if login_cache_valid "$token"; then
+  login="$(read_cached_login)"
+  say "GitHub auth: using cached login for $login."
+else
+  login="$(resolve_login "$token")"
+  if [ -z "$login" ]; then
+    say "The host GitHub token was rejected by the API. Run 'gh auth login' again."
+    exit 1
+  fi
+  write_hosts "$token" "$login"
+  # Store a hash of the token (never the token itself) so the next call can
+  # detect whether it changed without re-running gh api user.
+  {
+    mkdir -p "$GH_DIR"
+    token_hash "$token" >"$TOKEN_HASH_FILE"
+    chmod 600 "$TOKEN_HASH_FILE"
+  } 2>/dev/null || true
+  say "GitHub auth bridged for $login (token stays in $GH_DIR, which is gitignored)."
 fi
-
-write_hosts "$token" "$login"
-say "GitHub auth bridged for $login (token stays in $GH_DIR, which is gitignored)."

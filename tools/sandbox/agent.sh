@@ -70,6 +70,13 @@ resolve_sandbox_agent() {
 # Ensure the credential for the chosen agent is actually present, with an error
 # that says what to do instead of failing later inside the container.
 require_agent_credential() {
+  local stamp="$SANDBOX_DIR/.cache/stamps/.cred-synced-$1"
+  # Skip the pull when prepare_cache (boot.sh) just synced this agent — the
+  # stamp is written there and expires after 60 s so a stale container never
+  # hides a missing credential.
+  if sandbox_stamp_fresh "$stamp" 60; then
+    return 0
+  fi
   case "$1" in
     claude)
       bash "$SANDBOX_DIR/token-sync.sh" pull >&2 || {
@@ -87,4 +94,7 @@ require_agent_credential() {
         return 1
       } ;;
   esac
+  # Stamp for boot.sh's benefit (symmetry; boot may call us on a first boot).
+  mkdir -p "$SANDBOX_DIR/.cache/stamps"
+  touch "$stamp"
 }

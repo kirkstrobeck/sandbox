@@ -100,6 +100,7 @@ if [ -z "${message//[[:space:]]/}" ]; then
   usage 2
 fi
 
+_t_dispatch_start="$(sandbox_now_ms)"
 require_agent_credential "$agent" || exit 1
 
 # Today's model/plan/promo snapshot, fetched at most once a day for every
@@ -119,31 +120,47 @@ export SANDBOX_MODEL_DAILY
 SANDBOX_INNER_MODEL="$(resolve_sandbox_model "$agent")"
 export SANDBOX_INNER_MODEL
 
+_t_boot_start="$(sandbox_now_ms)"
 container="$(bash "$SCRIPT_DIR/boot.sh")" || {
   echo "Sandbox failed to start. See the errors above." >&2
   exit 1
 }
 SANDBOX_NAME="$container"
+sandbox_timing "boot" "$_t_boot_start" "$(sandbox_now_ms)"
 
 # The image bakes AGENT.md in at build time, so an edit to it would otherwise
 # need a rebuild before the inner agent read a word of it. The bind mount
 # already has the current copy, so refresh the three user-global locations from
-# there on every dispatch. Best effort in every step: an instruction file that
-# could not be copied is the image's slightly older one, which is not worth
-# failing a run over.
-docker exec -u agent -e "HOME=/home/agent" "$SANDBOX_NAME" bash -lc '
-  src="$0"
-  [ -r "$src" ] || exit 0
-  mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules
-  cp -f "$src" /home/agent/.claude/CLAUDE.md
-  cp -f "$src" /home/agent/.codex/AGENTS.md
-  # Cursor learns a user-global rule only through the alwaysApply frontmatter
-  # entrypoint.sh writes, so the same header is rebuilt around the new text.
-  {
-    printf -- "---\ndescription: You are the inner agent inside the sandbox container.\nalwaysApply: true\n---\n\n"
-    cat "$src"
-  } >/home/agent/.cursor/rules/sandbox-inner.mdc
-' "/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/AGENT.md" >/dev/null 2>&1 || true
+# there on every dispatch. Skip the docker exec when the file is unchanged
+# (same sha256 as the last copy) — one fewer docker exec on every warm boot.
+_t_agentmd_start="$(sandbox_now_ms)"
+_agent_md_src="$SCRIPT_DIR/AGENT.md"
+_agent_md_hash_file="$CACHE_DIR/.agent-md-hash"
+_agent_md_cur_hash=""
+if [ -r "$_agent_md_src" ]; then
+  _agent_md_cur_hash="$(sha256sum "$_agent_md_src" 2>/dev/null | awk '{print $1}' ||
+                        md5sum "$_agent_md_src" 2>/dev/null | awk '{print $1}' || true)"
+fi
+if [ -z "$_agent_md_cur_hash" ] || \
+   [ "$_agent_md_cur_hash" != "$(cat "$_agent_md_hash_file" 2>/dev/null || true)" ]; then
+  # Best effort: an instruction file that could not be copied is the image's
+  # slightly older one, which is not worth failing a run over.
+  docker exec -u agent -e "HOME=/home/agent" "$SANDBOX_NAME" bash -c '
+    src="$0"
+    [ -r "$src" ] || exit 0
+    mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules
+    cp -f "$src" /home/agent/.claude/CLAUDE.md
+    cp -f "$src" /home/agent/.codex/AGENTS.md
+    # Cursor learns a user-global rule only through the alwaysApply frontmatter
+    # entrypoint.sh writes, so the same header is rebuilt around the new text.
+    {
+      printf -- "---\ndescription: You are the inner agent inside the sandbox container.\nalwaysApply: true\n---\n\n"
+      cat "$src"
+    } >/home/agent/.cursor/rules/sandbox-inner.mdc
+  ' "/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/AGENT.md" >/dev/null 2>&1 || true
+  [ -n "$_agent_md_cur_hash" ] && printf '%s' "$_agent_md_cur_hash" >"$_agent_md_hash_file"
+fi
+sandbox_timing "agent-md" "$_t_agentmd_start" "$(sandbox_now_ms)"
 
 mkdir -p "$RUN_DIR"
 printf '%s' "$message" >"$RUN_DIR/msg"
@@ -151,8 +168,11 @@ rm -f "$RUN_DIR/last.json" "$RUN_DIR/last.txt" "$RUN_DIR/last.jsonl"
 
 echo "→ $agent (manager)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} ..." >&2
 
+_t_inner_start="$(sandbox_now_ms)"
 case "$agent" in
   claude) dispatch_claude "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
   codex)  dispatch_codex  "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
   cursor) dispatch_cursor "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
 esac
+sandbox_timing "inner" "$_t_inner_start" "$(sandbox_now_ms)"
+sandbox_timing "total" "$_t_dispatch_start" "$(sandbox_now_ms)"

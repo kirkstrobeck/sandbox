@@ -30,6 +30,8 @@ replace  tools/sandbox/manifest.sh
 replace  tools/sandbox/AGENT.md
 replace  tools/sandbox/Dockerfile
 replace  tools/sandbox/agent.sh
+replace  tools/sandbox/bench-test.sh
+replace  tools/sandbox/bench.sh
 replace  tools/sandbox/boot.sh
 replace  tools/sandbox/codex-token-sync.sh
 replace  tools/sandbox/colima.sh

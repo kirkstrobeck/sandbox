@@ -14,8 +14,11 @@ dispatch_claude() {
 
   # Only one inner run at a time. A previous run orphaned by a disconnected
   # client is still holding the repo, and two agents editing the same worktree
-  # produce corruption that is very hard to attribute later.
-  docker exec "$SANDBOX_NAME" pkill -f 'claude -p' >/dev/null 2>&1 || true
+  # produce corruption that is very hard to attribute later. Skip the kill when
+  # nothing is running — the docker exec round-trip is the expensive part.
+  if docker exec "$SANDBOX_NAME" pgrep -f 'claude -p' >/dev/null 2>&1; then
+    docker exec "$SANDBOX_NAME" pkill -f 'claude -p' >/dev/null 2>&1 || true
+  fi
 
   # Stderr to a sibling file so spurious warnings (trust dialogs, ignore-entries)
   # don't corrupt the JSON result. The result is written INSIDE the container,
@@ -28,7 +31,8 @@ dispatch_claude() {
     -e "CONT_FLAG=$continue_flag" \
     -e "SANDBOX_INNER_MODEL=${SANDBOX_INNER_MODEL:-}" \
     -e "SANDBOX_MODEL_DAILY=${SANDBOX_MODEL_DAILY:-}" \
-    "$SANDBOX_NAME" bash -lc '
+    -e "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" \
+    "$SANDBOX_NAME" bash -c '
       msg="$(cat "$MSG_FILE")"
       set -- -p $CONT_FLAG --verbose --dangerously-skip-permissions --output-format stream-json
       [ -n "$SANDBOX_INNER_MODEL" ] && set -- "$@" --model "$SANDBOX_INNER_MODEL"

@@ -42,32 +42,55 @@ ensure_image() {
 
 prepare_cache() {
   mkdir -p "$CACHE_DIR/claude-home" "$CACHE_DIR/codex-home" \
-           "$CACHE_DIR/cursor-home" "$CACHE_DIR/gh"
+           "$CACHE_DIR/cursor-home" "$CACHE_DIR/gh" "$CACHE_DIR/stamps"
 
   # This file is bind-mounted as a FILE, so it has to exist before the container
   # starts or Docker creates a directory in its place.
   [ -f "$CACHE_DIR/claude.json" ] || printf '{}\n' >"$CACHE_DIR/claude.json"
 
   # Seed trust so the inner Claude doesn't stop on a trust dialog.
-  # The container is the trust boundary; inner permission prompts are redundant.
+  # Skip the jq rewrite entirely when both trust keys are already true — avoids
+  # a write and a cat-to-bind-mounted-file on every warm boot.
   local cj="$CACHE_DIR/claude.json"
-  local tmp
-  tmp="$(mktemp "$cj.XXXXXX")"
-  if jq --arg r "$REPO_ROOT" \
-       '.projects |= (. // {}) |
-        .projects["/workspace"] |= (. // {}) |
-        .projects["/workspace"].hasTrustDialogAccepted = true |
-        .projects[$r] |= (. // {}) |
-        .projects[$r].hasTrustDialogAccepted = true' \
-       "$cj" >"$tmp" 2>/dev/null; then
-    mv "$tmp" "$cj"
-  else
-    rm -f "$tmp"
+  if ! jq -e --arg r "$REPO_ROOT" \
+       '.projects["/workspace"].hasTrustDialogAccepted == true and
+        .projects[$r].hasTrustDialogAccepted == true' \
+       "$cj" >/dev/null 2>&1; then
+    local tmp
+    tmp="$(mktemp "$cj.XXXXXX")"
+    if jq --arg r "$REPO_ROOT" \
+         '.projects |= (. // {}) |
+          .projects["/workspace"] |= (. // {}) |
+          .projects["/workspace"].hasTrustDialogAccepted = true |
+          .projects[$r] |= (. // {}) |
+          .projects[$r].hasTrustDialogAccepted = true' \
+         "$cj" >"$tmp" 2>/dev/null; then
+      # Same inode: this path is bind-mounted as a FILE. `mv` would replace the
+      # host inode and leave the container reading a stale or truncated copy.
+      cat "$tmp" >"$cj"
+      rm -f "$tmp"
+    else
+      rm -f "$tmp"
+    fi
   fi
 
-  bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged."
-  bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged."
-  bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged."
+  # Only pull the credential for the agent we are actually dispatching to, plus
+  # GitHub (needed for git push regardless of agent). When SANDBOX_AGENT is
+  # unset (e.g. direct `./sandbox up`), pull all three so any agent can run.
+  local agent="${SANDBOX_AGENT:-}"
+  if [ -z "$agent" ]; then
+    bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged."
+    bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged."
+    bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged."
+  else
+    case "$agent" in
+      claude) bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged." ;;
+      codex)  bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged." ;;
+      cursor) bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged." ;;
+    esac
+    # Stamp so dispatch.sh can skip the redundant require_agent_credential call.
+    touch "$CACHE_DIR/stamps/.cred-synced-$agent"
+  fi
   bash "$SCRIPT_DIR/github-token-sync.sh" >&2 || log "WARN: git push from inside the sandbox will not work."
 }
 

@@ -15,6 +15,7 @@
 #   ./sandbox rebuild                         force an image rebuild
 #   ./sandbox stop                            stop the container
 #   ./sandbox test                            run the gate test suite
+#   ./sandbox bench                           time a canonical dispatch (writes foo.md) and print ms
 #   ./sandbox --file path                  long message, no pipe (the gate denies pipes)
 #   ./sandbox update                          upgrade the harness from upstream
 
@@ -42,6 +43,7 @@ case "$cmd" in
   status)  shift; exec bash "$S/status.sh" "$@" ;;
   doctor)  shift; exec bash "$S/doctor.sh" "$@" ;;
   test)    shift; exec bash "$S/gate-test.sh" "$@" ;;
+  bench)   shift; exec bash "$S/bench.sh" "$@" ;;
   result)  shift; exec bash "$S/dispatch.sh" --result "$@" ;;
   rebuild) shift; SANDBOX_REBUILD=1 exec bash "$S/boot.sh" "$@" ;;
   stop)    shift; exec bash "$S/status.sh" --stop "$@" ;;

@@ -31,6 +31,10 @@ do.
   accept.** Do not sit in the repo with editor tools open.
 - If this product cannot spawn a worker on a different model, you still do not
   get to burn your own tokens on repetitive work — write a script and run it.
+- **For trivial tasks (write one file, echo a string), skip the worker entirely.**
+  Write a short shell script yourself and run it with the Bash tool. Spawning a
+  subagent costs more than the work. Workers are required for multi-file edits,
+  test runs, and git operations.
 
 ## Tokens write scripts. Scripts do work.
 
