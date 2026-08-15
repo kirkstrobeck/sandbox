@@ -62,6 +62,7 @@ replace  tools/sandbox/status.sh
 replace  tools/sandbox/tail.sh
 replace  tools/sandbox/token-sync.sh
 replace  tools/sandbox/update.sh
+replace  tools/sandbox/update-test.sh
 
 # Reference documentation for the harness, not project prose, so it tracks the
 # harness version rather than being preserved.

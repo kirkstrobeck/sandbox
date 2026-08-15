@@ -58,7 +58,7 @@ The mount layout is deliberately kept in one readable file,
 | Docker socket | `SANDBOX_DOCKER_SOCK` (default `/var/run/docker.sock`) → `/var/run/docker.sock` | read-write | **Mounted whenever the daemon answers `docker info`.** See below. |
 | Published ports | `SANDBOX_PORTS`, default `127.0.0.1:3000:3000` | — | The address half decides who on your network can reach the container. |
 | Build/dep dirs | Named volumes over `SANDBOX_VOLUME_DIRS` | read-write | Container-private; they shadow the bind mount, so writes there do not reach the Mac. |
-| Daily model snapshot | `$TMPDIR/sandbox-model-daily` on the host → `SANDBOX_MODEL_DAILY` environment variable | **not a mount** — text only, one way in | A few KB of public product-page text so the inner manager can pick a worker model without a web search. **The inner agent does not see that path**, or any of `$TMPDIR`. It holds no credentials and nothing project-specific. |
+| Daily model snapshot | `$TMPDIR/sandbox-model-daily` on the host → `SANDBOX_MODEL_DAILY` environment variable | **not a mount** — text only, one way in | Public product-page text plus the upstream harness's public git sha (`harness_sha`). The inner agent does not see that path, or any of `$TMPDIR`. No credentials, nothing project-specific. The sha is also read by `./sandbox up` to autoupdate the harness — still not a mount, still host-side only. |
 | Linked worktree git common dir | When `.git` is a pointer file, the common dir (`parent/.git`) is mounted at its literal host path | read-write | Same trust level as the worktree itself; required for git to work inside a linked worktree. The mount is detected from the pointer file — never from a `git` command. |
 | `SANDBOX_EXTRA_MOUNTS` | Whatever the project lists in `sandbox.conf` | as declared (`rw` or `ro`) | Explicit project capability. Listed in `sandbox.conf`, so the fingerprint recreates the container on change and `./sandbox doctor` can report them. |
 | `SANDBOX_EXTRA_ENV` | Key=value pairs listed in `sandbox.conf` | env variable only — not a mount | Passes project-specific configuration into the container without creating a filesystem path. Same clobber rule as extra mounts: append, do not reassign. |
@@ -109,7 +109,7 @@ nothing is watching."
 | Extra mounts (`SANDBOX_EXTRA_MOUNTS`) | Inner agent reaches additional host paths (secrets dirs, shared caches) | Listed in `sandbox.conf`; fingerprint recreates container on change; `./sandbox doctor` reports them; prefer `ro` for secrets |
 | Dispatching text you did not write (issue bodies, PR comments, scraped pages) | Automation | Treat it as untrusted input, because it is. Do not do this with a push token bridged. See prompt injection below |
 | Unattended or scheduled runs | Throughput | Everything above compounds: no human is reading the diff, so the token scope *is* the control |
-| A daily snapshot file in your `$TMPDIR` | The inner manager picks a cheap worker model without spending a web search on it | Host-side only. It stays out of the mount list, it holds public text and no credentials, and it is `chmod 600`. Passing it in as an environment variable is the control — mounting it would trade a real boundary for a copy |
+| A daily snapshot file in your `$TMPDIR` | The inner manager picks a cheap worker model; `./sandbox up` reads the harness sha to autoupdate | Host-side only. It stays out of the mount list, it holds public text and a public git sha — no credentials — and it is `chmod 600`. Passing it in as an environment variable is the control — mounting it would trade a real boundary for a copy. Kill switches: `SANDBOX_UPDATE_CHECK=0` (both off), `SANDBOX_AUTOUPDATE=0` (nudge only) |
 
 Reading the table one way: the lowest-footprint setup is Claude Code outside
 with both gates wired, no GitHub token bridged, ports on loopback, a daemon you
@@ -134,7 +134,7 @@ them is defensible without adding controls that are not in the box.
 | Separate credential homes | mount layout | Anthropic, OpenAI and Cursor tokens live in different directories, so a mount that needs one does not carry all three |
 | `.git/config` left alone | `entrypoint.sh` | Container git settings go in `~/.gitconfig`. `.git/config` is inside the bind mount and is the Mac's file |
 | Loopback ports by default | `sandbox.conf` | `SANDBOX_PORTS="127.0.0.1:3000:3000"` |
-| Daily snapshot stays host-side | [`model-daily.sh`](../tools/sandbox/model-daily.sh) | Written on the host, `chmod 600`, `mktemp` + `mv`, no history, no credentials in it. It is **not** in `run-args.sh` — the text crosses as one environment variable and the path does not cross at all |
+| Daily snapshot stays host-side | [`model-daily.sh`](../tools/sandbox/model-daily.sh) | Written on the host, `chmod 600`, `mktemp` + `mv`, no history, no credentials in it. Carries the upstream harness sha (public git sha, not a secret). It is **not** in `run-args.sh` — the text crosses as one environment variable and the path does not cross at all |
 | Hook wiring check | `./sandbox doctor` | Warns when `.claude/settings.json` does not reference `outer-gate.sh` — i.e. when the outer agent can still act on the host |
 
 Details: [docs/agents.md](agents.md) for the gates and the client-by-client

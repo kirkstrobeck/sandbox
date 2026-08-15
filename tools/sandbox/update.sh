@@ -17,11 +17,12 @@
 # script is one of the files the upgrade replaces underneath itself.
 
 set -uo pipefail
-# Read before config.sh gets a chance to set its default over the top. This is
-# the one setting where the environment must beat the config file: it is a
-# kill switch, and `SANDBOX_UPDATE_CHECK=0 ./sandbox up` has to actually be
-# quiet in a project whose sandbox.conf says 1.
+# Read before config.sh gets a chance to set its default over the top. These
+# are kill switches; the environment must beat the config file so that
+# `SANDBOX_UPDATE_CHECK=0 ./sandbox up` is actually quiet in a project whose
+# sandbox.conf says 1.
 UPDATE_CHECK_ENV="${SANDBOX_UPDATE_CHECK:-}"
+AUTOUPDATE_ENV="${SANDBOX_AUTOUPDATE:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=common.sh
@@ -109,12 +110,58 @@ stamp_age() {
   echo $(( $(date +%s) - when ))
 }
 
-# current | outdated | unknown. "unknown" covers both halves of the comparison
-# being unavailable — no network, or an install that predates ORIGIN.md — and
-# every caller treats it as "say nothing".
-STATUS="unknown"
-check() {
-  upstream_head
+short() { printf '%s' "${1:0:7}"; }
+
+# Pure predicate — returns 0 when cmd_nudge should run cmd_update, 1 otherwise.
+# All conditions are passed as positional arguments so the test suite can call
+# it with arbitrary values without touching the network or the filesystem.
+#
+#   $1  harness_sha        sha from the daily file (or "")
+#   $2  local_commit       sha from ORIGIN.md (or "")
+#   $3  harness_repo       repo from the daily file (e.g. "kirkstrobeck/sandbox")
+#   $4  harness_ref        ref from the daily file  (e.g. "main")
+#   $5  origin_repo        repo from ORIGIN.md / resolve_origin
+#   $6  origin_ref         ref from ORIGIN.md / resolve_origin
+#   $7  autoupdate_on      "1" when SANDBOX_AUTOUPDATE is active (default 1)
+#   $8  update_check_off   "1" when SANDBOX_UPDATE_CHECK=0 (kill switch active)
+#   $9  source_repo        "1" when install.sh is at REPO_ROOT (source tree)
+sandbox_autoupdate_should() {
+  local harness_sha="$1"  local_commit="$2"
+  local harness_repo="$3" harness_ref="$4"
+  local origin_repo="$5"  origin_ref="$6"
+  local autoupdate_on="${7:-1}"
+  local update_check_off="${8:-0}"
+  local source_repo="${9:-0}"
+  [ "$update_check_off" = "1" ] && return 1
+  [ "$source_repo"      = "1" ] && return 1
+  [ "$origin_repo" = "$harness_repo" ] || return 1
+  [ "$origin_ref"  = "$harness_ref"  ] || return 1
+  [ -n "$harness_sha"  ] || return 1
+  [ -n "$local_commit" ] || return 1
+  [ "$harness_sha" = "$local_commit" ] && return 1
+  [ "$autoupdate_on" = "1" ] || return 1
+  return 0
+}
+
+cmd_check() {
+  # shellcheck source=model-daily.sh
+  . "$SCRIPT_DIR/model-daily.sh"
+  # Prefer the daily file's sha when it is fresh — avoids a second GitHub call
+  # on a day we already fetched the upstream sha for the nudge.
+  if sandbox_model_daily_fresh; then
+    local _daily_sha
+    _daily_sha="$(sed -n 's/^harness_sha=//p' "$(_sandbox_model_daily_path)" 2>/dev/null | head -1)"
+    if [ -n "$_daily_sha" ]; then
+      UPSTREAM_SHA="$_daily_sha"
+      UPSTREAM_ERR=""
+    else
+      upstream_head
+    fi
+  else
+    upstream_head
+  fi
+
+  local STATUS="unknown"
   if [ -z "$UPSTREAM_SHA" ] || [ -z "$LOCAL_COMMIT" ]; then
     STATUS="unknown"
   elif [ "$UPSTREAM_SHA" = "$LOCAL_COMMIT" ]; then
@@ -123,12 +170,7 @@ check() {
     STATUS="outdated"
   fi
   stamp_write "$STATUS" "$UPSTREAM_SHA"
-}
 
-short() { printf '%s' "${1:0:7}"; }
-
-cmd_check() {
-  check
   case "$STATUS" in
     current)  log "up to date with $REPO@$REF ($(short "$LOCAL_COMMIT"))" ;;
     outdated) log "an update is available for $REPO@$REF — run: ./sandbox update" ;;
@@ -146,17 +188,47 @@ cmd_check() {
   return 0
 }
 
-# Called from boot.sh on every `./sandbox up`, so it has two hard rules: never
-# block, and never speak unless there is something to say.
+# Called from boot.sh on every `./sandbox up`. Two rules: never block, and
+# never speak unless there is something to say.
+#
+# The daily model file is both the data source (harness_sha) and the clock:
+# sandbox_model_daily_ensure ensures today's file is present and returns its
+# text. No separate background refresh or stamp write for the nudge path.
 cmd_nudge() {
   [ "${UPDATE_CHECK_ENV:-${SANDBOX_UPDATE_CHECK:-1}}" = "0" ] && return 0
-  if [ "$(stamp_age)" -gt "$STAMP_MAX_AGE" ]; then
-    # Refresh for next time, detached. Today's boot reports yesterday's answer,
-    # which is the right trade for a line of terminal courtesy.
-    ( check >/dev/null 2>&1 & ) >/dev/null 2>&1
+
+  # shellcheck source=model-daily.sh
+  . "$SCRIPT_DIR/model-daily.sh"
+  local daily_text daily_sha daily_repo daily_ref
+  daily_text="$(sandbox_model_daily_ensure)"
+  daily_sha="$(printf '%s\n' "$daily_text" | sed -n 's/^harness_sha=//p' | head -1)"
+  daily_repo="$(printf '%s\n' "$daily_text" | sed -n 's/^harness_repo=//p' | head -1)"
+  daily_ref="$(printf '%s\n' "$daily_text" | sed -n 's/^harness_ref=//p' | head -1)"
+
+  resolve_origin  # sets REPO, REF, LOCAL_COMMIT from ORIGIN.md
+
+  local autoupdate_on=1 update_check_off=0 source_repo=0
+  [ "${UPDATE_CHECK_ENV:-${SANDBOX_UPDATE_CHECK:-1}}" = "0" ] && update_check_off=1
+  [ "${AUTOUPDATE_ENV:-${SANDBOX_AUTOUPDATE:-1}}" = "1" ]     || autoupdate_on=0
+  [ -f "$REPO_ROOT/install.sh" ]                              && source_repo=1
+
+  if sandbox_autoupdate_should \
+       "$daily_sha" "$LOCAL_COMMIT" \
+       "$daily_repo" "$daily_ref" \
+       "$REPO" "$REF" \
+       "$autoupdate_on" "$update_check_off" "$source_repo"; then
+    log "Updating sandbox harness to $(short "$daily_sha") (daily snapshot)."
+    cmd_update
+    return $?
   fi
-  [ "$(stamp_field 2)" = "outdated" ] &&
+
+  # Different sha, matching origin, but autoupdate is off → nudge line only.
+  if [ "$source_repo" = "0" ] && [ "$update_check_off" = "0" ] && \
+     [ -n "$daily_sha" ] && [ -n "$LOCAL_COMMIT" ] && \
+     [ "$daily_sha" != "$LOCAL_COMMIT" ] && \
+     [ "$REPO" = "$daily_repo" ] && [ "$REF" = "$daily_ref" ]; then
     log "A newer sandbox harness is available ($REPO@$REF) — run: ./sandbox update"
+  fi
   return 0
 }
 
@@ -356,4 +428,4 @@ main() {
   esac
 }
 
-main "$@"
+[ "${BASH_SOURCE[0]}" = "$0" ] && main "$@"

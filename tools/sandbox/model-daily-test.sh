@@ -48,6 +48,13 @@ model_daily_tests() {
   unset SANDBOX_MODEL SANDBOX_DEFAULT_MODEL SANDBOX_MODEL_DAILY
   export SANDBOX_MODEL_DAILY_MAX_AGE=86400
 
+  # Prevent any network call for the harness sha in _sandbox_model_daily_write.
+  # Setting the variable (even to "") activates the env-override path that skips
+  # curl. Tests that need a specific sha override this below.
+  export SANDBOX_MODEL_DAILY_HARNESS_SHA=""
+  export SANDBOX_MODEL_DAILY_HARNESS_REPO=""
+  export SANDBOX_MODEL_DAILY_HARNESS_REF=""
+
   log="$tmp/fetches"
   export MD_FETCH_LOG="$log"
   : >"$log"
@@ -156,6 +163,38 @@ STUB
   check "default path: no doubled separator" clean \
     "$(case "$(TMPDIR="$tmp/tmpdir/" _sandbox_model_daily_path)" in *//*) echo doubled ;; *) echo clean ;; esac)"
   export SANDBOX_MODEL_DAILY_FILE="$tmp/nonexistent"
+
+  # Harness autoupdate keys — written from SANDBOX_MODEL_DAILY_HARNESS_SHA env
+  # without going through the product-page fetch path (FETCH_CMD / MD_FETCH_LOG).
+  echo
+  echo "Daily snapshot — harness autoupdate keys"
+  export SANDBOX_MODEL_DAILY_FILE="$file"
+  rm -f "$file"
+  : >"$log"
+  export SANDBOX_MODEL_DAILY_FETCH_CMD="bash $stub_ok"
+  export SANDBOX_MODEL_DAILY_HARNESS_SHA="abc123sha"
+  export SANDBOX_MODEL_DAILY_HARNESS_REPO=""
+  export SANDBOX_MODEL_DAILY_HARNESS_REF=""
+  sandbox_model_daily_ensure >/dev/null
+  check "harness sha: recorded from env" abc123sha "$(md_field "$file" harness_sha)"
+  check "harness autoupdate: written as 1" 1 "$(md_field "$file" harness_autoupdate)"
+  check "harness repo: env override recorded" "" "$(md_field "$file" harness_repo)"
+  check "harness ref: env override recorded" "" "$(md_field "$file" harness_ref)"
+  check "harness sha: no extra fetch-log entries" 5 "$(wc -l <"$log" | tr -d ' ')"
+
+  # Empty sha: all harness_* keys are still written (fail-open design).
+  rm -f "$file"
+  export SANDBOX_MODEL_DAILY_HARNESS_SHA=""
+  sandbox_model_daily_ensure >/dev/null
+  check "harness sha empty: harness_sha key present" present \
+    "$(grep -q '^harness_sha=' "$file" && echo present || echo absent)"
+  check "harness sha empty: harness_autoupdate still 1" 1 "$(md_field "$file" harness_autoupdate)"
+
+  # Restore for manager resolution tests.
+  export SANDBOX_MODEL_DAILY_FILE="$tmp/nonexistent"
+  export SANDBOX_MODEL_DAILY_HARNESS_SHA=""
+  export SANDBOX_MODEL_DAILY_HARNESS_REPO=""
+  export SANDBOX_MODEL_DAILY_HARNESS_REF=""
 
   # 4. Manager resolution. Each case leaves exactly one source of an answer
   # standing, because that is the only way to prove the order.

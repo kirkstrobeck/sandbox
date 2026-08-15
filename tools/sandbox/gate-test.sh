@@ -258,6 +258,10 @@ fi
 # shellcheck source=bench-test.sh
 . "$SCRIPT_DIR/bench-test.sh"
 
+# Autoupdate predicate: sandbox_autoupdate_should and update.sh syntax.
+# shellcheck source=update-test.sh
+. "$SCRIPT_DIR/update-test.sh"
+
 echo
 echo "install.sh — dry-run does not change files; no --force refuses foreign files"
 _itmp="$(mktemp -d)"

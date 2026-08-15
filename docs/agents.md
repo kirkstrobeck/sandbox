@@ -253,8 +253,8 @@ hours, once for every sandbox on the machine:
 | --- | --- |
 | Where | `$TMPDIR/sandbox-model-daily`, override with `SANDBOX_MODEL_DAILY_FILE` |
 | When | Only if missing or older than `SANDBOX_MODEL_DAILY_MAX_AGE` (86400s). Read first, always |
-| What | Public sources — Anthropic news and pricing, the Cursor changelog, the GitHub Codex releases atom and the npm `@openai/codex` latest document — crudely tag-stripped, filtered to lines mentioning a model, a price or a promo |
-| Shape | `fetched_at`, `fetched_at_iso`, `status=ok\|unavailable`, `<agent>_manager=` lines, then per-product notes. No history, `chmod 600`, written `mktemp` + `mv` |
+| What | Public sources — Anthropic news and pricing, the Cursor changelog, the GitHub Codex releases atom and the npm `@openai/codex` latest document — crudely tag-stripped, filtered to lines mentioning a model, a price or a promo. Also the upstream harness sha (`harness_sha`) via a separate GitHub commits API call |
+| Shape | `fetched_at`, `fetched_at_iso`, `status=ok\|unavailable`, `<agent>_manager=` lines, `harness_repo`, `harness_ref`, `harness_sha`, `harness_autoupdate`, then per-product notes. No history, `chmod 600`, written `mktemp` + `mv` |
 | How it gets in | `dispatch.sh` exports the text as `SANDBOX_MODEL_DAILY` and each backend passes it to `docker exec -e`. **Not a mount** |
 
 It fails open at every step. No `curl`, a dead page, a redesign that makes the
@@ -270,6 +270,12 @@ fails inside the container minutes later, which is worse than the default in
 `model.sh`. The keys are there for a human, or a future source that publishes
 real ids, to fill in. What the snapshot is actually for is the manager reading
 it — one env var instead of a web search.
+
+The `harness_sha` key drives autoupdate: `./sandbox up` (via `boot.sh`) reads
+the sha from the daily file and compares it to `SANDBOX_ORIGIN_COMMIT`. If they
+differ and `SANDBOX_AUTOUPDATE=1` (the default), `update.sh` fetches and
+installs the new harness before the container starts. Set `SANDBOX_AUTOUPDATE=0`
+to print a nudge line instead, or `SANDBOX_UPDATE_CHECK=0` to disable both.
 
 Nothing about it is mounted, and it must stay that way. The container does not
 see `$TMPDIR`; it sees an environment variable holding today's text. That is the

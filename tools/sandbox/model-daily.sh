@@ -137,6 +137,7 @@ EOF
 _sandbox_model_daily_write() {
   local file="$1" dir tmp now iso status="unavailable"
   local claude_notes cursor_notes codex_notes
+  local harness_repo harness_ref harness_sha harness_autoupdate _sha_body
 
   dir="$(dirname "$file")"
   mkdir -p "$dir" 2>/dev/null || true
@@ -157,6 +158,45 @@ _sandbox_model_daily_write() {
   # fallback in model.sh — so the keys exist for a human (or a future source
   # that publishes real ids) to fill in, and resolve_sandbox_model skips them
   # when they are blank.
+
+  # Harness autoupdate keys. Repo and ref are overridable via env for testing,
+  # including to an empty string. Use +_ rather than :- so an explicitly empty
+  # env var is respected rather than replaced with the default.
+  if [ -n "${SANDBOX_MODEL_DAILY_HARNESS_REPO+_}" ]; then
+    harness_repo="${SANDBOX_MODEL_DAILY_HARNESS_REPO}"
+  else
+    harness_repo="kirkstrobeck/sandbox"
+  fi
+  if [ -n "${SANDBOX_MODEL_DAILY_HARNESS_REF+_}" ]; then
+    harness_ref="${SANDBOX_MODEL_DAILY_HARNESS_REF}"
+  else
+    harness_ref="main"
+  fi
+  harness_autoupdate="${SANDBOX_MODEL_DAILY_HARNESS_AUTOUPDATE:-1}"
+
+  # Fetch harness sha via a direct GitHub API call — NOT through
+  # _sandbox_model_daily_fetch / FETCH_CMD (that path is for product pages and
+  # increments the test fetch log). Fail open: an empty sha still writes all
+  # harness_* keys. Set SANDBOX_MODEL_DAILY_HARNESS_SHA in the environment to
+  # provide a value without a network call (the test knob for this path).
+  if [ -n "${SANDBOX_MODEL_DAILY_HARNESS_SHA+_}" ]; then
+    harness_sha="${SANDBOX_MODEL_DAILY_HARNESS_SHA}"
+  else
+    harness_sha=""
+    if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 \
+         && [ -n "$harness_repo" ] && [ -n "$harness_ref" ]; then
+      _sha_body="$(mktemp 2>/dev/null)"
+      if [ -n "$_sha_body" ]; then
+        curl -sL -m "${SANDBOX_MODEL_DAILY_TIMEOUT:-8}" \
+          -H 'Accept: application/vnd.github+json' \
+          "https://api.github.com/repos/${harness_repo}/commits/${harness_ref}" \
+          -o "$_sha_body" 2>/dev/null &&
+          harness_sha="$(jq -r '.sha // empty' <"$_sha_body" 2>/dev/null)" || harness_sha=""
+        rm -f "$_sha_body"
+      fi
+    fi
+  fi
+
   {
     printf '# sandbox model daily snapshot. Regenerated at most once per 24h, no history.\n'
     printf '# Public product pages, crudely stripped. Advisory only, and possibly stale.\n'
@@ -166,6 +206,10 @@ _sandbox_model_daily_write() {
     printf 'claude_manager=%s\n' "${SANDBOX_MODEL_DAILY_CLAUDE_MANAGER:-}"
     printf 'cursor_manager=%s\n' "${SANDBOX_MODEL_DAILY_CURSOR_MANAGER:-}"
     printf 'codex_manager=%s\n' "${SANDBOX_MODEL_DAILY_CODEX_MANAGER:-}"
+    printf 'harness_repo=%s\n' "$harness_repo"
+    printf 'harness_ref=%s\n' "$harness_ref"
+    printf 'harness_sha=%s\n' "$harness_sha"
+    printf 'harness_autoupdate=%s\n' "$harness_autoupdate"
     printf '\n[claude]\n%s\n' "$claude_notes"
     printf '\n[cursor]\n%s\n' "$cursor_notes"
     printf '\n[codex]\n%s\n' "$codex_notes"

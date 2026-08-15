@@ -79,8 +79,10 @@ re-merged and the added/updated/removed files are printed. It is the one CLI
 verb that writes to the project on the host, so run it when the human asks for
 it — not on your own initiative — and follow it with `./sandbox up`.
 
-`./sandbox up` may print a line saying a newer harness exists. That is a
-once-a-day background check, and it changes nothing by itself.
+`./sandbox up` compares the daily snapshot's `harness_sha` to the installed
+commit. If behind and `SANDBOX_AUTOUPDATE=1`, it updates the harness and
+recreates the container. If `SANDBOX_AUTOUPDATE=0`, it prints a nudge line
+instead. `SANDBOX_UPDATE_CHECK=0` silences both.
 
 ## Choosing the inner agent and model
 
@@ -104,6 +106,12 @@ when missing or stale, it is shared by every sandbox on the machine, and it is
 **not a new mount** — the container never sees that path. A failed fetch still
 writes a stub, so a dead network costs one attempt a day rather than one per
 dispatch.
+
+The snapshot also stores the upstream harness sha. `./sandbox up` compares it to
+the installed commit: if behind and `SANDBOX_AUTOUPDATE=1` (the default), the
+harness is updated automatically before the container starts. Set
+`SANDBOX_AUTOUPDATE=0` in `sandbox.conf` to print a nudge line instead, or
+`SANDBOX_UPDATE_CHECK=0` to silence both.
 
 You do not pick worker models and you do not tell the manager how to split the
 job. The manager's standing rule is that tokens build scripts and only scripts

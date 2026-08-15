@@ -309,11 +309,25 @@ the manager can pick a worker model without spending a web search on it.
 | `SANDBOX_MODEL_DAILY_FETCH_CMD` | unset | Replaces `curl`. Given one URL, prints the page. This is how the tests run offline |
 | `SANDBOX_MODEL_DAILY` | — | Not read from the file: **set by `dispatch.sh`** and passed to `docker exec -e`. Set it yourself to override the snapshot for one run |
 
+In addition to model/plan/promo text the file also stores the current upstream
+harness sha so that `./sandbox up` can compare it to `SANDBOX_ORIGIN_COMMIT`
+without a separate GitHub API call. The relevant keys are:
+
+| Key | Notes |
+| --- | --- |
+| `harness_repo` | The repo the sha was fetched from (default `kirkstrobeck/sandbox`) |
+| `harness_ref` | The ref (default `main`) |
+| `harness_sha` | 40-char commit sha, or empty when the fetch failed |
+| `harness_autoupdate` | `1` — signals that this harness supports autoupdate |
+
+The sha is fetched via a direct `curl` + `jq` call to the GitHub commits API (not
+through the product-page path) and is subject to the same fail-open rule: a
+dead network writes an empty sha and the rest of the file is still usable.
+
 It is shared by every sandbox on the machine, because a promo is not
 project-specific. It is **not mounted** — the container never sees `$TMPDIR` and
 must not; the text crosses as an environment variable, which is why this is a
-host-side write like the update-check stamp rather than a new capability. See
-[security.md](security.md).
+host-side write rather than a new capability. See [security.md](security.md).
 
 Every failure path still writes the file, with `status=unavailable` and a
 timestamp. That is the point of the timestamp: a dead network costs one attempt
@@ -432,25 +446,33 @@ would overwrite the working copy. `git pull`, or `--force` if you meant it.
 
 ### `SANDBOX_UPDATE_CHECK`
 
-Default `1`. Once a day, `./sandbox up` asks the GitHub API which commit the
-recorded ref points at and prints one line if it differs from
-`SANDBOX_ORIGIN_COMMIT`:
+Default `1`. Enables the daily harness-update check. When this is `1`, the
+daily model snapshot includes the upstream `harness_sha` and `./sandbox up`
+compares it against `SANDBOX_ORIGIN_COMMIT`. If they differ and
+`SANDBOX_AUTOUPDATE=1`, the harness is updated automatically. If
+`SANDBOX_AUTOUPDATE=0`, a nudge line is printed instead:
 
 ```
 A newer sandbox harness is available (kirkstrobeck/sandbox@main) — run: ./sandbox update
 ```
 
-The request is unauthenticated, detached, and capped at 8 seconds
-(`SANDBOX_UPDATE_TIMEOUT`), and the line you see is the *previous* check's
-answer — a boot never waits on the network for it. Nothing is fetched or changed
-without `./sandbox update`. An install with no commit recorded, an unreachable
-github.com, a rate limit: all report "cannot tell" to `--check` and stay silent
-on boot.
+Set to `0` to silence both autoupdate and the nudge line — this is the
+combined kill switch. The environment beats the config file for this setting so
+that `SANDBOX_UPDATE_CHECK=0 ./sandbox up` is quiet in a project whose
+`sandbox.conf` says `1`.
 
-Set to `0` in `sandbox.conf` to switch it off for the project, or export
-`SANDBOX_UPDATE_CHECK=0` to switch it off for a shell — this is the one setting
-where the environment beats the file, because a kill switch that a config file
-can override is not one.
+### `SANDBOX_AUTOUPDATE`
+
+Default `1`. When `SANDBOX_UPDATE_CHECK=1` and the daily snapshot shows a newer
+harness sha, `./sandbox up` (via `boot.sh`) runs `./sandbox update`
+automatically before starting the container. The update fetches the upstream
+tarball and runs `install.sh` — one download per day at most; subsequent boots
+find the sha matches and return immediately.
+
+Set to `0` to print the nudge line instead of applying the update. The
+environment beats the config file for this setting too (same pattern as
+`SANDBOX_UPDATE_CHECK`). `SANDBOX_UPDATE_CHECK=0` overrides this and suppresses
+both.
 
 ## Environment variables, not in the file
 
@@ -463,7 +485,8 @@ can override is not one.
 | `CURSOR_API_KEY` | Bridged to the inner Cursor CLI ahead of any stored login. |
 | `SANDBOX_REBUILD=1` | Forces an image rebuild. What `./sandbox rebuild` sets. |
 | `SANDBOX_PORT_SCAN_LIMIT` | How far above a busy host port to look for a free one. Default `20`. |
-| `SANDBOX_UPDATE_CHECK=0` | Silences the daily "a newer harness exists" check for this shell. |
+| `SANDBOX_UPDATE_CHECK=0` | Disables the daily harness-update check and the autoupdate for this shell. |
+| `SANDBOX_AUTOUPDATE=0` | Prints the nudge line instead of running `./sandbox update` automatically. |
 | `SANDBOX_UPDATE_TIMEOUT` | Seconds the update check waits on the GitHub API. Default `8`. |
 | `SANDBOX_REPO` / `SANDBOX_REF` | Override the repo and ref `install.sh` and `./sandbox update` fetch. |
 | `COLIMA_PROFILE` | Non-default Colima profile, for socket resolution and the inotify daemon stop. |
