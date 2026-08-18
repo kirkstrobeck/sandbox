@@ -24,7 +24,8 @@ fi
 # OUTER agent, dispatch everything". An inner agent that reads only that file
 # would dutifully try to dispatch to itself. The user-global copy is what
 # outranks it.
-mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules
+mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules \
+         /home/agent/.gemini /home/agent/.config/amp /home/agent/.config/opencode
 
 # ~/.claude.json lives in the directory mount, never as its own file mount.
 # A file bind-mount pins an inode; host rewrites then desync and truncate it.
@@ -44,9 +45,18 @@ if [ -f /etc/sandbox-agent.md ]; then
     printf -- '---\ndescription: You are the inner agent inside the sandbox container.\nalwaysApply: true\n---\n\n'
     cat /etc/sandbox-agent.md
   } >/home/agent/.cursor/rules/sandbox-inner.mdc 2>/dev/null || true
+  # agy reads ~/.gemini/AGENTS.md as its user-global instruction file.
+  cp -f /etc/sandbox-agent.md /home/agent/.gemini/AGENTS.md 2>/dev/null || true
+  # Amp reads ~/.config/amp/AGENTS.md (or system.md — check current docs).
+  cp -f /etc/sandbox-agent.md /home/agent/.config/amp/AGENTS.md 2>/dev/null || true
+  # OpenCode reads ~/.config/opencode/instructions.md as its system prompt file.
+  cp -f /etc/sandbox-agent.md /home/agent/.config/opencode/instructions.md 2>/dev/null || true
   chown -R agent:"$(id -g agent)" \
     /home/agent/.claude/CLAUDE.md /home/agent/.codex/AGENTS.md \
-    /home/agent/.cursor 2>/dev/null || true
+    /home/agent/.cursor \
+    /home/agent/.gemini/AGENTS.md \
+    /home/agent/.config/amp/AGENTS.md \
+    /home/agent/.config/opencode/instructions.md 2>/dev/null || true
 fi
 
 as_agent() { gosu agent env HOME=/home/agent "$@"; }

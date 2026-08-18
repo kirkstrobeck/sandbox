@@ -9,11 +9,14 @@ ARG DOCKER_CLI_VERSION=27.5.1
 ARG PNPM_VERSION=10.15.0
 ARG CODEX_VERSION=latest
 ARG CURSOR_VERSION=latest
+ARG COPILOT_CLI_VERSION=latest
+ARG AMP_CLI_VERSION=latest
+ARG OPENCODE_VERSION=latest
 ARG WITH_PLAYWRIGHT=0
 ARG PLAYWRIGHT_VERSION=1.55.0
 ARG HOST_UID=1000
 ARG HOST_GID=1000
-ARG SANDBOX_STACK=v2
+ARG SANDBOX_STACK=v3
 
 # boot.sh reads this label off the built image and rebuilds when it drifts from
 # sandbox.conf. Without it, a Dockerfile change silently never reaches anyone
@@ -66,6 +69,29 @@ RUN npm install -g \
       "@anthropic-ai/claude-code@latest" \
       "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force
+
+# Wave 1 agent CLIs. Installed best-effort: a failed install is logged but does
+# not break the image build. The binary is tried at dispatch time; if it is
+# missing the dispatch fails with a clear "command not found" message directing
+# the user to install manually or add to the Dockerfile.
+#
+# Copilot CLI: @github/copilot-cli is the published npm package for the
+# standalone headless Copilot agent. Package name subject to change; verify
+# against https://www.npmjs.com/org/github.
+#
+# Amp: @sourcegraph/amp-cli provides the `amp` binary.
+#
+# OpenCode: opencode on npm.
+#
+# agy (Antigravity): the Gemini CLI successor. Not yet on npm as of the current
+# image build; install-on-first-dispatch is the fallback (the container has node,
+# so `npm install -g agy` inside the container works without a rebuild).
+RUN npm install -g \
+      "@github/copilot-cli@${COPILOT_CLI_VERSION}" \
+      "@sourcegraph/amp-cli@${AMP_CLI_VERSION}" \
+      "opencode@${OPENCODE_VERSION}" \
+    2>/dev/null || echo "WARN: one or more Wave-1 CLIs failed to install; dispatch will error if that CLI is requested." \
+    && npm cache clean --force 2>/dev/null || true
 
 # The Cursor CLI is not on npm. Its installer downloads a self-contained package
 # and symlinks the binary into ~/.local/bin, which would put it in root's home

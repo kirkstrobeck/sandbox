@@ -23,7 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 gate_bypass_if_inner
 
 payload="$(gate_read_payload)"
-cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)"
+# Claude payload: .tool_input.command; Cursor beforeShellExecution: .command at top level.
+cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // .command // ""' 2>/dev/null)"
 [ -z "$cmd" ] && allow "no command to evaluate"
 
 # Leading VAR=value assignments are not the command. Strip them so

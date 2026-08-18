@@ -4,18 +4,24 @@ The inner agent runs with permissions disabled, so what it can reach is decided
 entirely by what gets mounted into the container. This is the list, how each one
 arrives, and what is deliberately left out.
 
-Four credentials cross the boundary, all of them into
-`tools/sandbox/.cache/`, which is mounted into the container's home:
+Credentials cross the boundary into `tools/sandbox/.cache/`, which is mounted
+into the container's home. Only the credential(s) for the dispatched agent are
+synced — `prepare_cache` runs only the sync script for the active agent, plus
+GitHub unconditionally:
 
-| What | Host source | Cache path | Mounted at |
-| --- | --- | --- | --- |
-| Claude Code OAuth | macOS Keychain, or `~/.claude/.credentials.json` | `.cache/claude-home/.credentials.json` | `/home/agent/.claude` |
-| Codex auth | `~/.codex/auth.json` | `.cache/codex-home/auth.json` | `/home/agent/.codex` |
-| Cursor auth | `CURSOR_API_KEY`, macOS Keychain, or `~/.cursor/auth.json` | `.cache/cursor-home/auth.json` | `/home/agent/.config/cursor` |
-| GitHub token | `gh auth token`, `GH_TOKEN`, or `GITHUB_TOKEN` | `.cache/gh/hosts.yml` | `/home/agent/.config/gh` |
+| What | Host source | Cache path | Mounted at | Direction |
+| --- | --- | --- | --- | --- |
+| Claude Code OAuth | macOS Keychain, or `~/.claude/.credentials.json` | `.cache/claude-home/.credentials.json` | `/home/agent/.claude` | two-way |
+| Codex auth | `~/.codex/auth.json` | `.cache/codex-home/auth.json` | `/home/agent/.codex` | two-way |
+| Cursor auth | `CURSOR_API_KEY`, macOS Keychain, or `~/.cursor/auth.json` | `.cache/cursor-home/auth.json` | `/home/agent/.config/cursor` | pull-only |
+| GitHub token | `gh auth token`, `GH_TOKEN`, or `GITHUB_TOKEN` | `.cache/gh/hosts.yml` | `/home/agent/.config/gh` | pull-only |
+| Copilot | reuses the GitHub token (`gh auth token` inside the container) | — | `/home/agent/.config/gh` (shared) | pull-only |
+| agy / Gemini | `GEMINI_API_KEY`, or `~/.gemini/credentials.json` | `.cache/agy-home/` | `/home/agent/.gemini` | pull-only |
+| Amp | `AMP_API_KEY`, or `~/.config/amp/config.json` | `.cache/amp-home/` | `/home/agent/.config/amp` | pull-only |
+| OpenCode | `~/.config/opencode/` (BYOK provider keys) | `.cache/opencode-home/` | `/home/agent/.config/opencode` | pull-only |
 
-`boot.sh` refreshes all four in `prepare_cache` before the container starts, so
-every dispatch runs against current credentials.
+`boot.sh` refreshes the relevant credential in `prepare_cache` before the
+container starts, so every dispatch runs against current credentials.
 
 ## `.cache/` holds live credentials
 
@@ -204,19 +210,62 @@ first place.
 If the inner agent should not be able to push at all, do not bridge a token:
 `boot.sh` warns and carries on, and everything except pushing still works.
 
+## Copilot: `copilot-token-sync.sh`
+
+Copilot reuses the GitHub OAuth token that is already bridged for `git push`.
+Inside the container, `dispatch-copilot.sh` calls `gh auth token` and exports
+the result as `COPILOT_GITHUB_TOKEN` immediately before invoking the CLI. No
+separate credential file is written; there is nothing to push back.
+
+## agy / Gemini: `agy-token-sync.sh`
+
+`tools/sandbox/agy-token-sync.sh pull|push|status`.
+
+agy authenticates through Google OAuth. The OAuth dance re-runs server-side and
+the container cannot refresh a Google credential on the Mac's behalf, so this
+bridge is **pull-only**. `GEMINI_API_KEY` takes precedence over the OAuth
+credential for the same reason CURSOR_API_KEY is preferred over a login token:
+an API key does not expire mid-run. With neither present, `pull` fails with the
+command to fix it.
+
+## Amp: `amp-token-sync.sh`
+
+`tools/sandbox/amp-token-sync.sh pull|push|status`.
+
+Amp authenticates with an API key (`AMP_API_KEY`). The key does not rotate, so
+this bridge is **pull-only**. The sync reads the key from the env var or from
+`~/.config/amp/config.json`, writes it to `.cache/amp-home/.amp_api_key`, and
+mirrors the config file if one exists. `dispatch-amp.sh` forwards the key as an
+env var and also falls back to the cache file. With no key found, `pull` fails.
+
+## OpenCode: `opencode-token-sync.sh`
+
+`tools/sandbox/opencode-token-sync.sh pull|push|status`.
+
+OpenCode is BYOK (bring-your-own-key): the user stores provider API keys in
+`~/.config/opencode/` and the directory is bind-mounted into the container. The
+sync copies `config.json`, `settings.json`, `opencode.json`, and
+`providers.json` into the cache. Provider API keys do not rotate, so this bridge
+is **pull-only**. If the host config directory does not exist, an empty cache dir
+is created — a project that configures via environment variables still works.
+
 ## Checking and fixing
 
 ```bash
-./sandbox doctor                                   # all four, plus the fix for each
+./sandbox doctor                                   # all agents, plus the fix for each
 bash tools/sandbox/token-sync.sh status            # Claude: host vs cache expiresAt
 bash tools/sandbox/codex-token-sync.sh status      # Codex: host vs cache last_refresh
 bash tools/sandbox/cursor-token-sync.sh status     # Cursor: which fields each side has
+bash tools/sandbox/agy-token-sync.sh status        # agy: API key or OAuth credential
+bash tools/sandbox/amp-token-sync.sh status        # Amp: API key present/missing
+bash tools/sandbox/opencode-token-sync.sh status   # OpenCode: config dir populated
 ```
 
 | Symptom | Fix |
 | --- | --- |
 | Dispatch returns a login or auth error | Run `claude`, `codex login`, or `agent login`, on the Mac and sign in. The next dispatch re-bridges it. |
 | Cursor auth expires mid-run, repeatedly | The bridged credential is login-only and cannot refresh in the container. Export `CURSOR_API_KEY` instead. |
+| agy auth fails mid-run | Export `GEMINI_API_KEY` instead of relying on OAuth — API keys don't expire. |
 | `git push` fails inside the container | `gh auth login` on the Mac, then `./sandbox up` re-syncs the token. |
 | Logged out on the Mac after a long run | The push-back did not land. `token-sync.sh status` shows which side is newer; signing in on the Mac is always safe. |
 | `doctor` fails on `.cache is NOT gitignored` | Add `tools/sandbox/.cache/` to `.gitignore` before anything else. |

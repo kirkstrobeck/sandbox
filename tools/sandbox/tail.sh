@@ -61,9 +61,26 @@ if docker exec "$SANDBOX_NAME" pgrep -f 'cursor-agent' >/dev/null 2>&1; then
   echo "Inner Cursor is starting; its stream appears here once the first line lands."
   exit 0
 fi
+if docker exec "$SANDBOX_NAME" pgrep -f 'agy -p' >/dev/null 2>&1; then
+  echo "Inner agy is starting; its stream appears here once the first line lands."
+  exit 0
+fi
 if docker exec "$SANDBOX_NAME" pgrep -f 'claude -p' >/dev/null 2>&1; then
   echo "Inner Claude is running. Its transcript arrives all at once when it finishes."
   echo "Recover it any time with: bash tools/sandbox/dispatch.sh --result"
+  exit 0
+fi
+if docker exec "$SANDBOX_NAME" pgrep -f 'copilot -p' >/dev/null 2>&1; then
+  echo "Inner Copilot is running. Its answer arrives when it finishes."
+  echo "Recover it any time with: ./sandbox result"
+  exit 0
+fi
+if docker exec "$SANDBOX_NAME" pgrep -x 'amp' >/dev/null 2>&1; then
+  echo "Inner Amp is running."
+  exit 0
+fi
+if docker exec "$SANDBOX_NAME" pgrep -f 'opencode run' >/dev/null 2>&1; then
+  echo "Inner OpenCode is running."
   exit 0
 fi
 

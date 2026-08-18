@@ -65,8 +65,30 @@ else
 fi
 if [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ] || gh auth token >/dev/null 2>&1; then
   ok "GitHub token available (git push will work inside the sandbox)"
+  ok "Copilot (reuses GitHub token)"
 else
   warn "no GitHub token — run 'gh auth login' if the inner agent needs to push"
+  warn "no Copilot credential — Copilot reuses the GitHub token; run 'gh auth login'"
+fi
+if [ -n "${AGY_API_KEY:-${GEMINI_API_KEY:-}}" ]; then
+  ok "agy / Antigravity (AGY_API_KEY or GEMINI_API_KEY in environment)"
+elif [ -d "$HOME/.gemini" ] && [ -n "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; then
+  ok "agy / Antigravity (~/.gemini directory)"
+else
+  warn "no agy credential — set AGY_API_KEY (or GEMINI_API_KEY) or run 'agy auth'"
+fi
+if [ -n "${AMP_API_KEY:-}" ]; then
+  ok "Amp (AMP_API_KEY in environment)"
+elif [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/amp/auth.json" ] || [ -f "$HOME/.amp/auth.json" ]; then
+  ok "Amp (auth.json present)"
+else
+  warn "no Amp credential — set AMP_API_KEY or run 'amp auth login'"
+fi
+if [ -d "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" ] && \
+   [ -n "$(ls -A "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" 2>/dev/null)" ]; then
+  ok "OpenCode (~/.config/opencode config present)"
+else
+  warn "no OpenCode config — add provider keys to ~/.config/opencode/config.json"
 fi
 
 echo "project"
@@ -156,7 +178,13 @@ if [ -f "$REPO_ROOT/.claude/settings.json" ] &&
    grep -q 'outer-gate.sh' "$REPO_ROOT/.claude/settings.json" 2>/dev/null; then
   ok "PreToolUse hooks wired in .claude/settings.json"
 else
-  warn "hooks not wired — the outer agent can still act on the host"
+  warn "Claude hooks not wired — the outer agent can still act on the host"
+fi
+if [ -f "$REPO_ROOT/.cursor/hooks.json" ] &&
+   grep -q 'sandbox-shell' "$REPO_ROOT/.cursor/hooks.json" 2>/dev/null; then
+  ok "beforeShellExecution wired in .cursor/hooks.json"
+else
+  warn "Cursor hooks not wired in .cursor/hooks.json — Cursor outer agent is not enforced"
 fi
 
 echo

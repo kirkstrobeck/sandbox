@@ -20,8 +20,8 @@ resolve_sandbox_agent() {
 
   if [ -n "${SANDBOX_AGENT:-}" ]; then
     case "$SANDBOX_AGENT" in
-      codex|claude|cursor) printf '%s\n' "$SANDBOX_AGENT"; return 0 ;;
-      *) echo "SANDBOX_AGENT must be 'codex', 'claude' or 'cursor', got '$SANDBOX_AGENT'." >&2; return 2 ;;
+      codex|claude|cursor|copilot|agy|amp|opencode) printf '%s\n' "$SANDBOX_AGENT"; return 0 ;;
+      *) echo "SANDBOX_AGENT must be one of: codex, claude, cursor, copilot, agy, amp, opencode — got '$SANDBOX_AGENT'." >&2; return 2 ;;
     esac
   fi
 
@@ -55,12 +55,16 @@ resolve_sandbox_agent() {
   # prompt that nobody will ever answer is worse than picking the default.
   if [ "$allow_prompt" = "prompt" ] && [ -t 0 ] && [ -t 1 ]; then
     local reply
-    printf 'Which agent should run inside the sandbox? [claude/codex/cursor] ' >&2
+    printf 'Which agent should run inside the sandbox? [claude/codex/cursor/copilot/agy/amp/opencode] ' >&2
     read -r reply
     case "$reply" in
       codex) printf 'codex\n'; return 0 ;;
       claude|cl) printf 'claude\n'; return 0 ;;
       cursor|cu) printf 'cursor\n'; return 0 ;;
+      copilot) printf 'copilot\n'; return 0 ;;
+      agy) printf 'agy\n'; return 0 ;;
+      amp) printf 'amp\n'; return 0 ;;
+      opencode) printf 'opencode\n'; return 0 ;;
     esac
   fi
 
@@ -91,6 +95,26 @@ require_agent_credential() {
     cursor)
       bash "$SANDBOX_DIR/cursor-token-sync.sh" pull >&2 || {
         echo "Sign in on the Mac first: run 'agent login', or export CURSOR_API_KEY." >&2
+        return 1
+      } ;;
+    copilot)
+      bash "$SANDBOX_DIR/copilot-token-sync.sh" pull >&2 || {
+        echo "Sign in on the Mac first: run 'gh auth login'." >&2
+        return 1
+      } ;;
+    agy)
+      bash "$SANDBOX_DIR/agy-token-sync.sh" pull >&2 || {
+        echo "Sign in on the Mac first: set AGY_API_KEY (or GEMINI_API_KEY) in your shell, or run 'agy auth'." >&2
+        return 1
+      } ;;
+    amp)
+      bash "$SANDBOX_DIR/amp-token-sync.sh" pull >&2 || {
+        echo "Sign in on the Mac first: set AMP_API_KEY in your shell, or run 'amp auth login'." >&2
+        return 1
+      } ;;
+    opencode)
+      bash "$SANDBOX_DIR/opencode-token-sync.sh" pull >&2 || {
+        echo "Configure OpenCode on the Mac first: add provider keys to ~/.config/opencode/config.json." >&2
         return 1
       } ;;
   esac

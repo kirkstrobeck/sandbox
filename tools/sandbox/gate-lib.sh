@@ -14,10 +14,18 @@ DISPATCH_MSG='Do not run this on the host. Dispatch: ./sandbox "<message>" or ./
 # Claude Code reads this exact JSON shape from a PreToolUse hook. Exit 0 always:
 # a nonzero exit is a hook *error*, which is not the same thing as a deny and is
 # handled differently by the client.
+#
+# When GATE_PROTOCOL=cursor the hook is a Cursor beforeShellExecution /
+# preToolUse / beforeReadFile handler, which expects a different envelope.
 decide() {
   local decision="$1" reason="$2"
-  jq -nc --arg d "$decision" --arg r "$reason" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
+  if [ "${GATE_PROTOCOL:-}" = "cursor" ]; then
+    jq -nc --arg p "$decision" --arg r "$reason" \
+      '{permission:$p,user_message:$r,agent_message:$r}'
+  else
+    jq -nc --arg d "$decision" --arg r "$reason" \
+      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
+  fi
   exit 0
 }
 

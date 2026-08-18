@@ -111,6 +111,14 @@ _sandbox_model_daily_sources() {
     # The releases atom and the npm manifest answer curl without gating.
     codex)  printf '%s\n' 'https://github.com/openai/codex/releases.atom' \
                           'https://registry.npmjs.org/@openai/codex/latest' ;;
+    copilot) printf '%s\n' 'https://docs.github.com/en/copilot/about-github-copilot/what-is-github-copilot' \
+                           'https://github.com/features/copilot' ;;
+    agy)    printf '%s\n' 'https://developers.google.com/gemini/api/docs' \
+                          'https://registry.npmjs.org/agy/latest' ;;
+    amp)    printf '%s\n' 'https://ampcode.com/changelog' \
+                          'https://registry.npmjs.org/@sourcegraph/amp-cli/latest' ;;
+    opencode) printf '%s\n' 'https://opencode.ai' \
+                            'https://registry.npmjs.org/opencode/latest' ;;
   esac
 }
 
@@ -136,7 +144,7 @@ EOF
 # is atomic.
 _sandbox_model_daily_write() {
   local file="$1" dir tmp now iso status="unavailable"
-  local claude_notes cursor_notes codex_notes
+  local claude_notes cursor_notes codex_notes copilot_notes agy_notes amp_notes opencode_notes
   local harness_repo harness_ref harness_sha harness_autoupdate _sha_body
 
   dir="$(dirname "$file")"
@@ -147,7 +155,11 @@ _sandbox_model_daily_write() {
   claude_notes="$(_sandbox_model_daily_product claude)"
   cursor_notes="$(_sandbox_model_daily_product cursor)"
   codex_notes="$(_sandbox_model_daily_product codex)"
-  [ -n "$claude_notes$cursor_notes$codex_notes" ] && status="ok"
+  copilot_notes="$(_sandbox_model_daily_product copilot)"
+  agy_notes="$(_sandbox_model_daily_product agy)"
+  amp_notes="$(_sandbox_model_daily_product amp)"
+  opencode_notes="$(_sandbox_model_daily_product opencode)"
+  [ -n "$claude_notes$cursor_notes$codex_notes$copilot_notes$agy_notes$amp_notes$opencode_notes" ] && status="ok"
 
   now="$(date +%s)"
   iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')"
@@ -206,6 +218,10 @@ _sandbox_model_daily_write() {
     printf 'claude_manager=%s\n' "${SANDBOX_MODEL_DAILY_CLAUDE_MANAGER:-}"
     printf 'cursor_manager=%s\n' "${SANDBOX_MODEL_DAILY_CURSOR_MANAGER:-}"
     printf 'codex_manager=%s\n' "${SANDBOX_MODEL_DAILY_CODEX_MANAGER:-}"
+    printf 'copilot_manager=%s\n' "${SANDBOX_MODEL_DAILY_COPILOT_MANAGER:-}"
+    printf 'agy_manager=%s\n' "${SANDBOX_MODEL_DAILY_AGY_MANAGER:-}"
+    printf 'amp_manager=%s\n' "${SANDBOX_MODEL_DAILY_AMP_MANAGER:-}"
+    printf 'opencode_manager=%s\n' "${SANDBOX_MODEL_DAILY_OPENCODE_MANAGER:-}"
     printf 'harness_repo=%s\n' "$harness_repo"
     printf 'harness_ref=%s\n' "$harness_ref"
     printf 'harness_sha=%s\n' "$harness_sha"
@@ -213,6 +229,10 @@ _sandbox_model_daily_write() {
     printf '\n[claude]\n%s\n' "$claude_notes"
     printf '\n[cursor]\n%s\n' "$cursor_notes"
     printf '\n[codex]\n%s\n' "$codex_notes"
+    printf '\n[copilot]\n%s\n' "$copilot_notes"
+    printf '\n[agy]\n%s\n' "$agy_notes"
+    printf '\n[amp]\n%s\n' "$amp_notes"
+    printf '\n[opencode]\n%s\n' "$opencode_notes"
   } >"$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
 
   mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }

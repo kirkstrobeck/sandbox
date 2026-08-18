@@ -91,6 +91,11 @@ gate_is_outer_state() {
 gate_is_allowed() {
   local p="$1"
   gate_is_outer_state "$p" && return 0
+  # Credentials are never readable or writable from the outer side, even though
+  # the broader tools/sandbox/ prefix is allowed for harness files.
+  case "$p/" in
+    "$PROJECT_ROOT/tools/sandbox/.cache/"*) return 1 ;;
+  esac
   case "$p/" in
     "$PROJECT_ROOT/.claude/"*) return 0 ;;
     "$PROJECT_ROOT/.cursor/"*) return 0 ;;
@@ -114,7 +119,8 @@ tool="$(printf '%s' "$payload" | jq -r '.tool_name // "edit"' 2>/dev/null)"
 paths="$(printf '%s' "$payload" | jq -r '
   [ .tool_input.file_path?,
     .tool_input.notebook_path?,
-    (.tool_input.edits? // [] | .[]? | .file_path?) ]
+    (.tool_input.edits? // [] | .[]? | .file_path?),
+    .file_path? ]
   | map(select(type == "string" and length > 0)) | .[]' 2>/dev/null)"
 
 if [ -z "$paths" ]; then
