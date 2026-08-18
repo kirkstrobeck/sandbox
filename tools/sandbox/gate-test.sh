@@ -20,6 +20,34 @@ decision_of() {
   printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision // "ERROR"' 2>/dev/null
 }
 
+cursor_decision_of() {
+  printf '%s' "$1" | jq -r '.permission // "ERROR"' 2>/dev/null
+}
+
+cursor_shell_case() {
+  local expected="$1" cmd="$2"
+  local out
+  out="$(jq -nc --arg c "$cmd" '{command:$c}' |
+    GATE_PROTOCOL=cursor bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+  check "cursor shell: $cmd" "$expected" "$(cursor_decision_of "$out")"
+}
+
+cursor_write_case() {
+  local expected="$1" path="$2"
+  local out
+  out="$(jq -nc --arg p "$path" '{tool_input:{file_path:$p}}' |
+    GATE_PROTOCOL=cursor bash "$SCRIPT_DIR/outer-write-gate.sh" 2>/dev/null)"
+  check "cursor write: $path" "$expected" "$(cursor_decision_of "$out")"
+}
+
+cursor_read_case() {
+  local expected="$1" path="$2"
+  local out
+  out="$(jq -nc --arg p "$path" '{file_path:$p}' |
+    GATE_PROTOCOL=cursor bash "$PROJECT_ROOT/.cursor/hooks/sandbox-read.sh" 2>/dev/null)"
+  check "cursor read: $path" "$expected" "$(cursor_decision_of "$out")"
+}
+
 check() {
   local label="$1" expected="$2" actual="$3"
   if [ "$expected" = "$actual" ]; then
@@ -143,6 +171,25 @@ inner="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
   'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"git push\"}}" | bash "$0"' \
   "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
 check "bash: git push (SANDBOX_INNER=1)" allow "$(decision_of "$inner")"
+
+echo
+echo "Cursor protocol — GATE_PROTOCOL=cursor emits {permission, user_message, agent_message}"
+cursor_shell_case deny  'git status'
+cursor_shell_case allow './sandbox "x"'
+cursor_write_case deny  "$PROJECT_ROOT/src/app.ts"
+cursor_write_case allow "$PROJECT_ROOT/tools/sandbox/foo.sh"
+cursor_read_case  deny  "$PROJECT_ROOT/tools/sandbox/.cache/x"
+cursor_read_case  allow "$PROJECT_ROOT/docs/agents.md"
+cursor_read_case  allow "$PROJECT_ROOT/src/app.ts"
+inner_cursor="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
+  'jq -nc "{command:\"git status\"}" | GATE_PROTOCOL=cursor bash "$0"' \
+  "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "cursor shell: git status (SANDBOX_INNER=1)" allow "$(cursor_decision_of "$inner_cursor")"
+
+echo
+echo "Write gate — .cache is denied even though tools/sandbox/ is broadly allowed"
+write_case deny  "$PROJECT_ROOT/tools/sandbox/.cache/credentials.json"
+write_case deny  "$PROJECT_ROOT/tools/sandbox/.cache/stamps/anything"
 
 echo
 echo "Bash gate — project extra allow is after named denials"
@@ -280,6 +327,33 @@ fi
 # Autoupdate predicate: sandbox_autoupdate_should and update.sh syntax.
 # shellcheck source=update-test.sh
 . "$SCRIPT_DIR/update-test.sh"
+
+echo
+echo "Wave 1 agents — require_agent_credential is wired"
+# shellcheck source=agent.sh
+. "$SCRIPT_DIR/agent.sh"
+# Verify the Wave-1 placeholder is gone: none of the four should echo "Wave 1"
+for _w1_agent in copilot agy amp opencode; do
+  _w1_out="$(SANDBOX_DIR="$SCRIPT_DIR" require_agent_credential "$_w1_agent" 2>&1 || true)"
+  check "require_agent_credential $_w1_agent: no Wave-1 stub" absent \
+    "$(printf '%s' "$_w1_out" | grep -q 'Wave 1' && echo present || echo absent)"
+done
+# resolve_sandbox_agent accepts all seven names via SANDBOX_AGENT
+for _w1_agent in copilot agy amp opencode; do
+  check "resolve_sandbox_agent: accepts $_w1_agent via SANDBOX_AGENT" "$_w1_agent" \
+    "$(SANDBOX_AGENT="$_w1_agent" resolve_sandbox_agent noprompt 2>/dev/null)"
+done
+
+echo
+echo "Wave 1 agents — dispatch files syntax"
+for _w1_f in dispatch-copilot.sh dispatch-agy.sh dispatch-amp.sh dispatch-opencode.sh; do
+  check "bash -n $_w1_f" ok \
+    "$(bash -n "$SCRIPT_DIR/$_w1_f" 2>&1 >/dev/null && echo ok || echo "syntax error")"
+done
+for _w1_f in copilot-token-sync.sh agy-token-sync.sh amp-token-sync.sh opencode-token-sync.sh; do
+  check "bash -n $_w1_f" ok \
+    "$(bash -n "$SCRIPT_DIR/$_w1_f" 2>&1 >/dev/null && echo ok || echo "syntax error")"
+done
 
 if [ -f "$PROJECT_ROOT/install.sh" ]; then
 echo

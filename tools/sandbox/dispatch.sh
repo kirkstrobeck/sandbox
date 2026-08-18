@@ -32,6 +32,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/dispatch-codex.sh"
 # shellcheck source=dispatch-cursor.sh
 . "$SCRIPT_DIR/dispatch-cursor.sh"
+# shellcheck source=dispatch-copilot.sh
+. "$SCRIPT_DIR/dispatch-copilot.sh"
+# shellcheck source=dispatch-agy.sh
+. "$SCRIPT_DIR/dispatch-agy.sh"
+# shellcheck source=dispatch-amp.sh
+. "$SCRIPT_DIR/dispatch-amp.sh"
+# shellcheck source=dispatch-opencode.sh
+. "$SCRIPT_DIR/dispatch-opencode.sh"
 
 RUN_DIR="$CACHE_DIR/run"
 RUN_DIR_CTR="/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/.cache/run"
@@ -87,6 +95,25 @@ if [ "$want_result" = 1 ]; then
       [ -f "$RUN_DIR/last.jsonl" ] || { echo "No previous Cursor result." >&2; exit 1; }
       cursor_result_from_log "$RUN_DIR/last.jsonl"
       printf '\n'
+      exit 0 ;;
+    copilot)
+      [ -f "$RUN_DIR/last.txt" ] || { echo "No previous Copilot result." >&2; exit 1; }
+      cat "$RUN_DIR/last.txt"
+      exit 0 ;;
+    agy)
+      [ -f "$RUN_DIR/last.jsonl" ] || { echo "No previous agy result." >&2; exit 1; }
+      agy_result_from_stream "$RUN_DIR/last.jsonl"
+      exit $? ;;
+    amp)
+      if [ -f "$RUN_DIR/last.txt" ]; then
+        cat "$RUN_DIR/last.txt"; exit 0
+      fi
+      [ -f "$RUN_DIR/last.jsonl" ] || { echo "No previous Amp result." >&2; exit 1; }
+      jq -r 'select(.type == "result") | .result // empty' "$RUN_DIR/last.jsonl" 2>/dev/null | tail -1
+      exit 0 ;;
+    opencode)
+      [ -f "$RUN_DIR/last.txt" ] || { echo "No previous OpenCode result." >&2; exit 1; }
+      cat "$RUN_DIR/last.txt"
       exit 0 ;;
   esac
 fi
@@ -149,9 +176,13 @@ if [ -z "$_agent_md_cur_hash" ] || \
   docker exec -u agent -e "HOME=/home/agent" "$SANDBOX_NAME" bash -c '
     src="$0"
     [ -r "$src" ] || exit 0
-    mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules
+    mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules \
+             /home/agent/.gemini /home/agent/.config/amp /home/agent/.config/opencode
     cp -f "$src" /home/agent/.claude/CLAUDE.md
     cp -f "$src" /home/agent/.codex/AGENTS.md
+    cp -f "$src" /home/agent/.gemini/AGENTS.md
+    cp -f "$src" /home/agent/.config/amp/AGENTS.md
+    cp -f "$src" /home/agent/.config/opencode/instructions.md
     # Cursor learns a user-global rule only through the alwaysApply frontmatter
     # entrypoint.sh writes, so the same header is rebuilt around the new text.
     {
@@ -171,9 +202,13 @@ echo "→ $agent (manager)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} ..." 
 
 _t_inner_start="$(sandbox_now_ms)"
 case "$agent" in
-  claude) dispatch_claude "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  codex)  dispatch_codex  "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  cursor) dispatch_cursor "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  claude)   dispatch_claude   "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  codex)    dispatch_codex    "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  cursor)   dispatch_cursor   "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  copilot)  dispatch_copilot  "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  agy)      dispatch_agy      "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  amp)      dispatch_amp      "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  opencode) dispatch_opencode "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
 esac
 sandbox_timing "inner" "$_t_inner_start" "$(sandbox_now_ms)"
 sandbox_timing "total" "$_t_dispatch_start" "$(sandbox_now_ms)"

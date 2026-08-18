@@ -109,14 +109,20 @@ bridged like the other two, and `dispatch-cursor.sh` drives it exactly the way
 the Codex backend drives Codex. `./sandbox -a cursor "task"` works, and a Cursor
 outer agent gets one by default.
 
-**Outside**, Cursor reads `.cursor/rules/sandbox.mdc`, installed with
-`alwaysApply: true`, which says what `AGENTS.md` says and points at it. But
-**Cursor still has no `PreToolUse` enforcement** — those hooks are a Claude Code
-feature and they do not run there, so nothing stops a Cursor outer agent from
-running `pnpm install` on your Mac. In Cursor the boundary is only as good as
-the rule: the moment you are about to run a command in the terminal is the
-moment to dispatch instead. If you want the mechanical version, drive the outer
-agent from Claude Code.
+**Outside**, Cursor reads `.cursor/rules/sandbox.mdc` (installed with
+`alwaysApply: true`) and enforces the same boundary via `.cursor/hooks.json`.
+Three hooks run on every agent action:
+
+| Hook | Script | What it checks |
+| --- | --- | --- |
+| `beforeShellExecution` | `.cursor/hooks/sandbox-shell.sh` | Shell commands — same allow/deny policy as `outer-gate.sh` |
+| `preToolUse(Write\|Delete)` | `.cursor/hooks/sandbox-write.sh` | File write/delete paths |
+| `beforeReadFile` | `.cursor/hooks/sandbox-read.sh` | Read paths — denies `tools/sandbox/.cache/` (credentials) |
+
+`failClosed: true` in the hooks file means a hook crash denies the action
+rather than passing it through. `install.sh` merges the hook entries into any
+existing `.cursor/hooks.json` so other project hooks are preserved. Run
+`./sandbox doctor` to verify the hooks are wired; it warns if they are missing.
 
 The inner Cursor invocation is:
 
@@ -150,8 +156,8 @@ conventions. They do *not* share a model — see below.
 Nobody is asked. The outer client leaves fingerprints in the environment of
 every command it runs, and `tools/sandbox/agent.sh` reads them:
 
-1. `SANDBOX_AGENT` if set — `codex`, `claude` or `cursor`; anything else is an
-   error.
+1. `SANDBOX_AGENT` if set — `codex`, `claude`, `cursor`, `copilot`, `agy`,
+   `amp`, or `opencode`; anything else is an error.
 2. **Codex**, if any `CODEX_*` variable exists or `TERM_PROGRAM=codex`.
 3. **Claude**, if `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, or
    `CLAUDE_AGENT_SDK_VERSION` is set.

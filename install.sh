@@ -319,6 +319,36 @@ else
   put ".claude/settings.json (PreToolUse gates wired)"
 fi
 
+# --- cursor hooks: merged, never clobbered ----------------------------------
+# Same pattern as the Claude settings merge above: drop any hook entries that
+# point at our scripts and re-add the current versions, leaving every other
+# hook the project has untouched.
+if [ -n "$DRY_RUN" ]; then
+  put ".cursor/hooks.json (sandbox hooks wired)"
+else
+  cursor_hooks="$TARGET/.cursor/hooks.json"
+  mkdir -p "$TARGET/.cursor"
+  [ -f "$cursor_hooks" ] || printf '{"version":1,"failClosed":true,"hooks":{}}\n' >"$cursor_hooks"
+  jq --slurpfile new "$SRC/.cursor/hooks.json" '
+    .version = 1 |
+    .failClosed = true |
+    .hooks = (.hooks // {}) |
+    .hooks.beforeShellExecution = (
+      ((.hooks.beforeShellExecution // []) | map(select(
+         (.command // "") | test("sandbox-shell\\.sh") | not)))
+      + $new[0].hooks.beforeShellExecution) |
+    .hooks.preToolUse = (
+      ((.hooks.preToolUse // []) | map(select(
+         (.command // "") | test("sandbox-write\\.sh") | not)))
+      + $new[0].hooks.preToolUse) |
+    .hooks.beforeReadFile = (
+      ((.hooks.beforeReadFile // []) | map(select(
+         (.command // "") | test("sandbox-read\\.sh") | not)))
+      + $new[0].hooks.beforeReadFile)
+  ' "$cursor_hooks" >"$cursor_hooks.tmp" && mv "$cursor_hooks.tmp" "$cursor_hooks"
+  put ".cursor/hooks.json (sandbox hooks wired)"
+fi
+
 # --- gitignore: the cache holds live credentials ----------------------------
 # Written whether or not this directory is a git repo. If it becomes one later,
 # the ignore lines are already there and the tokens under .cache never get a

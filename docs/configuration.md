@@ -342,6 +342,9 @@ a day, not one attempt per dispatch. Delete the file to force a refetch.
 | `SANDBOX_PNPM_VERSION` | `10.15.0` | |
 | `SANDBOX_CODEX_VERSION` | `latest` | `@openai/codex`. |
 | `SANDBOX_CURSOR_VERSION` | `latest` | Cursor CLI. Not on npm — a dated lab build like `2026.08.04-aaa8809`. `latest` reads the current one out of `cursor.com/install` at build time. |
+| `SANDBOX_COPILOT_CLI_VERSION` | `latest` | `@github/copilot-cli`. Installed best-effort; if the package is renamed, pin to a known-good version. |
+| `SANDBOX_AMP_CLI_VERSION` | `latest` | `@sourcegraph/amp-cli`. |
+| `SANDBOX_OPENCODE_VERSION` | `latest` | `opencode` (sst.dev). |
 | `SANDBOX_WITH_PLAYWRIGHT` | `0` | `1` installs Chromium with deps — a large image. |
 | `SANDBOX_PLAYWRIGHT_VERSION` | `1.55.0` | Only used when the above is `1`. |
 

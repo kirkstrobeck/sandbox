@@ -37,6 +37,9 @@ ensure_image() {
     --build-arg "PNPM_VERSION=$SANDBOX_PNPM_VERSION" \
     --build-arg "CODEX_VERSION=$SANDBOX_CODEX_VERSION" \
     --build-arg "CURSOR_VERSION=$SANDBOX_CURSOR_VERSION" \
+    --build-arg "COPILOT_CLI_VERSION=${SANDBOX_COPILOT_CLI_VERSION:-latest}" \
+    --build-arg "AMP_CLI_VERSION=${SANDBOX_AMP_CLI_VERSION:-latest}" \
+    --build-arg "OPENCODE_VERSION=${SANDBOX_OPENCODE_VERSION:-latest}" \
     --build-arg "WITH_PLAYWRIGHT=$SANDBOX_WITH_PLAYWRIGHT" \
     --build-arg "PLAYWRIGHT_VERSION=$SANDBOX_PLAYWRIGHT_VERSION" \
     --build-arg "SANDBOX_STACK=$SANDBOX_STACK" \
@@ -47,7 +50,9 @@ ensure_image() {
 
 prepare_cache() {
   mkdir -p "$CACHE_DIR/claude-home" "$CACHE_DIR/codex-home" \
-           "$CACHE_DIR/cursor-home" "$CACHE_DIR/gh" "$CACHE_DIR/stamps"
+           "$CACHE_DIR/cursor-home" "$CACHE_DIR/gh" "$CACHE_DIR/stamps" \
+           "$CACHE_DIR/copilot-home" "$CACHE_DIR/agy-home" \
+           "$CACHE_DIR/amp-home" "$CACHE_DIR/opencode-home"
 
   # ~/.claude.json lives inside the claude-home *directory* mount (see
   # entrypoint.sh / ensure_claude_json_link). A FILE bind-mount of claude.json
@@ -93,9 +98,13 @@ prepare_cache() {
     bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged."
   elif ! sandbox_stamp_fresh "$CACHE_DIR/stamps/.cred-synced-$agent" 60; then
     case "$agent" in
-      claude) bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged." ;;
-      codex)  bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged." ;;
-      cursor) bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged." ;;
+      claude)   bash "$SCRIPT_DIR/token-sync.sh" pull >&2 || log "WARN: no Claude credential bridged." ;;
+      codex)    bash "$SCRIPT_DIR/codex-token-sync.sh" pull >&2 || log "WARN: no Codex credential bridged." ;;
+      cursor)   bash "$SCRIPT_DIR/cursor-token-sync.sh" pull >&2 || log "WARN: no Cursor credential bridged." ;;
+      copilot)  bash "$SCRIPT_DIR/copilot-token-sync.sh" pull >&2 || log "WARN: no Copilot (GitHub) credential bridged." ;;
+      agy)      bash "$SCRIPT_DIR/agy-token-sync.sh" pull >&2 || log "WARN: no agy credential bridged." ;;
+      amp)      bash "$SCRIPT_DIR/amp-token-sync.sh" pull >&2 || log "WARN: no Amp credential bridged." ;;
+      opencode) bash "$SCRIPT_DIR/opencode-token-sync.sh" pull >&2 || log "WARN: no OpenCode config bridged." ;;
     esac
     mkdir -p "$CACHE_DIR/stamps"
     touch "$CACHE_DIR/stamps/.cred-synced-$agent"

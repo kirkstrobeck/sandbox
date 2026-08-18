@@ -5,7 +5,7 @@
 # Bump `version` whenever the set of paths changes. It is not used for
 # comparison — the path lists are — but it gives a human something to point at.
 
-version 3
+version 5
 
 # Modes
 #
@@ -34,6 +34,10 @@ replace  tools/sandbox/bench-test.sh
 replace  tools/sandbox/bench.sh
 replace  tools/sandbox/boot.sh
 replace  tools/sandbox/codex-token-sync.sh
+replace  tools/sandbox/copilot-token-sync.sh
+replace  tools/sandbox/agy-token-sync.sh
+replace  tools/sandbox/amp-token-sync.sh
+replace  tools/sandbox/opencode-token-sync.sh
 replace  tools/sandbox/colima.sh
 replace  tools/sandbox/common.sh
 replace  tools/sandbox/config.sh
@@ -42,6 +46,10 @@ replace  tools/sandbox/dev-fs.sh
 replace  tools/sandbox/dispatch-claude.sh
 replace  tools/sandbox/dispatch-codex.sh
 replace  tools/sandbox/dispatch-cursor.sh
+replace  tools/sandbox/dispatch-copilot.sh
+replace  tools/sandbox/dispatch-agy.sh
+replace  tools/sandbox/dispatch-amp.sh
+replace  tools/sandbox/dispatch-opencode.sh
 replace  tools/sandbox/dispatch.sh
 replace  tools/sandbox/doctor.sh
 replace  tools/sandbox/entrypoint.sh
@@ -74,6 +82,11 @@ preserve AGENTS.md
 preserve CLAUDE.md
 preserve .cursor/rules/sandbox.mdc
 
+# --- Cursor outer hooks (harness-owned, replaced on every install) -----------
+replace  .cursor/hooks/sandbox-shell.sh
+replace  .cursor/hooks/sandbox-write.sh
+replace  .cursor/hooks/sandbox-read.sh
+
 # --- touched, not owned -----------------------------------------------------
 manage   tools/sandbox/ORIGIN.md            # generated: repo, ref, commit
 manage   tools/sandbox/sandbox.conf.new     # generated: incoming defaults
@@ -81,4 +94,5 @@ manage   tools/sandbox/sandbox.local.conf   # yours, machine-local, gitignored
 manage   tools/sandbox/.cache               # live credentials and run state
 manage   tools/sandbox/.install-hashes      # generated: replace-file hashes for drift detection
 manage   .claude/settings.json              # PreToolUse gates merged in
+manage   .cursor/hooks.json                 # sandbox hooks merged in
 manage   .gitignore                         # credential paths appended

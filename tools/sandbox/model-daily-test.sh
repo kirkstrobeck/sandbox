@@ -98,7 +98,7 @@ STUB
   check "ensure: prints the snapshot" ok "$(md_field "$file" status)"
   check "ensure: stdout is the file" same \
     "$([ "$out" = "$(cat "$file")" ] && echo same || echo different)"
-  check "ensure: fetched every source once" 5 "$(wc -l <"$log" | tr -d ' ')"
+  check "ensure: fetched every source once" 13 "$(wc -l <"$log" | tr -d ' ')"
   check "ensure: digest kept a promo line" found \
     "$(grep -qi 'promo' "$file" && echo found || echo missing)"
   check "ensure: file is not world-readable" 600 \
@@ -124,7 +124,7 @@ STUB
     "$([ "$(sandbox_model_daily_age)" -gt 86400 ] && echo old || echo young)"
   export SANDBOX_MODEL_DAILY_FETCH_CMD="bash $stub_ok"
   sandbox_model_daily_ensure >/dev/null
-  check "stale: refetches" 5 "$(wc -l <"$log" | tr -d ' ')"
+  check "stale: refetches" 13 "$(wc -l <"$log" | tr -d ' ')"
   check "stale: overwrites the old content" gone \
     "$(grep -q 'stale-marker' "$file" && echo present || echo gone)"
 
@@ -180,7 +180,7 @@ STUB
   check "harness autoupdate: written as 1" 1 "$(md_field "$file" harness_autoupdate)"
   check "harness repo: env override recorded" "" "$(md_field "$file" harness_repo)"
   check "harness ref: env override recorded" "" "$(md_field "$file" harness_ref)"
-  check "harness sha: no extra fetch-log entries" 5 "$(wc -l <"$log" | tr -d ' ')"
+  check "harness sha: no extra fetch-log entries" 13 "$(wc -l <"$log" | tr -d ' ')"
 
   # Empty sha: all harness_* keys are still written (fail-open design).
   rm -f "$file"
@@ -225,11 +225,33 @@ STUB
     "$(ANTHROPIC_MODEL="outer-tiny" resolve_sandbox_model claude)"
   check "resolve: an unknown agent gets no flag" "(empty)" \
     "$(out="$(resolve_sandbox_model banana)"; printf '%s' "${out:-(empty)}")"
+  # Wave 1 fallbacks
+  check "resolve: copilot fallback is empty" "(empty)" \
+    "$(out="$(resolve_sandbox_model copilot)"; printf '%s' "${out:-(empty)}")"
+  check "resolve: agy fallback" gemini-2.0-flash "$(resolve_sandbox_model agy)"
+  check "resolve: amp fallback is empty" "(empty)" \
+    "$(out="$(resolve_sandbox_model amp)"; printf '%s' "${out:-(empty)}")"
+  check "resolve: opencode fallback is empty" "(empty)" \
+    "$(out="$(resolve_sandbox_model opencode)"; printf '%s' "${out:-(empty)}")"
+  # Daily snapshot manager keys for Wave 1 agents
+  check "resolve: copilot daily beats fallback" copilot-model-x \
+    "$(SANDBOX_MODEL_DAILY="$(printf 'status=ok\ncopilot_manager=copilot-model-x\n')" \
+       resolve_sandbox_model copilot)"
+  check "resolve: agy daily beats fallback" agy-model-x \
+    "$(SANDBOX_MODEL_DAILY="$(printf 'status=ok\nagy_manager=agy-model-x\n')" \
+       resolve_sandbox_model agy)"
+  check "resolve: amp daily beats fallback" amp-model-x \
+    "$(SANDBOX_MODEL_DAILY="$(printf 'status=ok\namp_manager=amp-model-x\n')" \
+       resolve_sandbox_model amp)"
+  check "resolve: opencode daily beats fallback" opencode-model-x \
+    "$(SANDBOX_MODEL_DAILY="$(printf 'status=ok\nopencode_manager=opencode-model-x\n')" \
+       resolve_sandbox_model opencode)"
 
   echo
   echo "Syntax — the scripts a dispatch sources"
   local f
-  for f in model-daily.sh model.sh dispatch.sh dispatch-claude.sh dispatch-codex.sh dispatch-cursor.sh; do
+  for f in model-daily.sh model.sh dispatch.sh dispatch-claude.sh dispatch-codex.sh dispatch-cursor.sh \
+           dispatch-copilot.sh dispatch-agy.sh dispatch-amp.sh dispatch-opencode.sh; do
     check "bash -n $f" ok "$(bash -n "$MD_DIR/$f" 2>&1 >/dev/null && echo ok || echo "syntax error")"
   done
 
@@ -238,9 +260,22 @@ STUB
   # regression, not a convenience.
   check "run-args.sh does not mount the snapshot or TMPDIR" absent \
     "$(grep -qE 'TMPDIR|sandbox-model-daily' "$MD_DIR/run-args.sh" && echo present || echo absent)"
-  check "every backend passes the snapshot in" 3 \
+  check "every backend passes the snapshot in" 7 \
     "$(grep -l 'SANDBOX_MODEL_DAILY' "$MD_DIR"/dispatch-claude.sh \
-        "$MD_DIR"/dispatch-codex.sh "$MD_DIR"/dispatch-cursor.sh 2>/dev/null | wc -l | tr -d ' ')"
+        "$MD_DIR"/dispatch-codex.sh "$MD_DIR"/dispatch-cursor.sh \
+        "$MD_DIR"/dispatch-copilot.sh "$MD_DIR"/dispatch-agy.sh \
+        "$MD_DIR"/dispatch-amp.sh "$MD_DIR"/dispatch-opencode.sh 2>/dev/null | wc -l | tr -d ' ')"
+  echo
+  echo "prepare_cache — only syncs the dispatched agent"
+  # Verify the dispatched-agent-only sync logic for Wave 1 agents (no live network, just script inspection)
+  check "agy-token-sync.sh is sourced for agy agent" present \
+    "$(grep -q 'agy-token-sync.sh' "$MD_DIR/boot.sh" && echo present || echo absent)"
+  check "amp-token-sync.sh is sourced for amp agent" present \
+    "$(grep -q 'amp-token-sync.sh' "$MD_DIR/boot.sh" && echo present || echo absent)"
+  check "opencode-token-sync.sh is sourced for opencode agent" present \
+    "$(grep -q 'opencode-token-sync.sh' "$MD_DIR/boot.sh" && echo present || echo absent)"
+  check "copilot-token-sync.sh is sourced for copilot agent" present \
+    "$(grep -q 'copilot-token-sync.sh' "$MD_DIR/boot.sh" && echo present || echo absent)"
 
   rm -rf "$tmp"
 }

@@ -35,10 +35,21 @@ _sandbox_manager_fallback() {
   case "$1" in
     # High enough to route and review. Not the flagship, and deliberately not a
     # fast/mini/haiku/composer tier — those are what the WORKERS get.
-    claude) printf 'claude-sonnet-4-6\n' ;;
-    cursor) printf 'cursor-grok-4.6-high\n' ;;
-    codex)  printf 'gpt-5.3-codex\n' ;;
-    *)      printf '\n' ;;
+    claude)   printf 'claude-sonnet-4-6\n' ;;
+    cursor)   printf 'cursor-grok-4.6-high\n' ;;
+    codex)    printf 'gpt-5.3-codex\n' ;;
+    # copilot: Copilot selects the model from its plan; passing a model id may
+    # not be supported by all CLI versions. Empty = CLI default.
+    copilot)  printf '\n' ;;
+    # agy (Antigravity): Gemini model. gemini-2.0-flash is the mid-tier reasoning
+    # model appropriate for manager work; bump to 2.5-pro for harder tasks.
+    agy)      printf 'gemini-2.0-flash\n' ;;
+    # amp: Amp routes internally; --model is accepted but may not map to the same
+    # namespace as other CLIs. Empty = Amp default routing.
+    amp)      printf '\n' ;;
+    # opencode: BYOK, model is configured in ~/.config/opencode/config.json.
+    opencode) printf '\n' ;;
+    *)        printf '\n' ;;
   esac
 }
 

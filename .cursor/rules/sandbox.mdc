@@ -22,8 +22,10 @@ takes and passes in as an environment variable — not a new mount), and the
 manager picks the workers. `./sandbox "task"` needs no extra flags; `-m <id>`
 pins the manager for one run when the human asks for it.
 
-Cursor does not enforce this the way Claude Code does — the PreToolUse hooks in
-`.claude/settings.json` are a Claude Code feature and they do not run here. In
-Cursor the boundary is only as good as this rule, so hold it deliberately: when
-you are about to run a command in the terminal, that is the moment to dispatch
-instead.
+This boundary is enforced via `.cursor/hooks.json` (three hooks wired by
+`install.sh`: `beforeShellExecution` checks shell commands against the same
+allow/deny policy as the Claude gate; `preToolUse(Write/Delete)` blocks source
+file edits; `beforeReadFile` blocks reads from `tools/sandbox/.cache/`).
+`failClosed: true` means a hook crash denies the action rather than passing it.
+Run `./sandbox doctor` to verify the hooks are wired. If you get a denial,
+you have not found an obstacle — you have found the design. Dispatch instead.
