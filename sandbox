@@ -55,9 +55,11 @@ esac
 
 # A single bare token that is not a known verb is a typo, not a task.
 # `./sandbox down` must not be sent to the inner agent as the prompt "down".
+# A quoted sentence ("add a health check") contains a space — let it through.
 if [ $# -eq 1 ]; then
   case "$cmd" in
     -*) ;;
+    *\ *) ;;
     *)
       printf 'unknown verb: %s\n' "$cmd" >&2
       case "$cmd" in

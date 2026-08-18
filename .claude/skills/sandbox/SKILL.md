@@ -108,10 +108,11 @@ writes a stub, so a dead network costs one attempt a day rather than one per
 dispatch.
 
 The snapshot also stores the upstream harness sha. `./sandbox up` compares it to
-the installed commit: if behind and `SANDBOX_AUTOUPDATE=1` (the default), the
-harness is updated automatically before the container starts. Set
-`SANDBOX_AUTOUPDATE=0` in `sandbox.conf` to print a nudge line instead, or
-`SANDBOX_UPDATE_CHECK=0` to silence both.
+the installed commit: if behind and `SANDBOX_AUTOUPDATE=1`, the harness is
+updated automatically before the container starts. The default is `0` (off) —
+autoupdate rewrites host gate scripts, so it requires an explicit opt-in. Set
+`SANDBOX_AUTOUPDATE=1` in `sandbox.conf` to enable, or `SANDBOX_UPDATE_CHECK=0`
+to silence both the nudge and autoupdate.
 
 You do not pick worker models and you do not tell the manager how to split the
 job. The manager's standing rule is that tokens build scripts and only scripts

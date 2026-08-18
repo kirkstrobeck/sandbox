@@ -79,12 +79,38 @@ update_tests() {
   check "should: origin ref mismatch → no" no \
     "$(sandbox_autoupdate_should "$HS" "$LC" "$HR" "$HF" "$HR" "dev" 1 0 0 && echo yes || echo no)"
 
+  # Default for autoupdate_on is now 0 (off). Omitting arg 7 must mean no.
+  check "should: default autoupdate off (no arg 7) → no" no \
+    "$(sandbox_autoupdate_should "$HS" "$LC" "$HR" "$HF" "$HR" "$HF" && echo yes || echo no)"
+
   echo
   echo "Syntax — update.sh and update-test.sh"
   check "bash -n update.sh" ok \
     "$(bash -n "$UT_DIR/update.sh" 2>&1 && echo ok || echo "syntax error")"
   check "bash -n update-test.sh" ok \
     "$(bash -n "$UT_DIR/update-test.sh" 2>&1 && echo ok || echo "syntax error")"
+
+  echo
+  echo "update.sh re-exec — self-overwrite exits 0"
+  # Create a minimal offline environment: a fake project + a fake source whose
+  # install.sh overwrites update.sh in the target, simulating the real scenario.
+  # No network is involved because --from uses a local path.
+  _ut_proj="$(mktemp -d)"
+  _ut_src="$(mktemp -d)"
+  mkdir -p "$_ut_proj/tools/sandbox" "$_ut_src/tools/sandbox"
+  # Give the fake project a complete tools/sandbox so common.sh, manifest.sh etc. work.
+  cp "$UT_DIR"/*.sh "$UT_DIR/MANIFEST" "$_ut_proj/tools/sandbox/" 2>/dev/null || true
+  # The fake source's MANIFEST lists update.sh as a replace file.
+  cp "$UT_DIR/MANIFEST" "$_ut_src/tools/sandbox/"
+  # The fake install.sh overwrites update.sh to simulate the real self-overwrite.
+  printf '#!/usr/bin/env bash\nprintf "# replaced\n" > "%s/tools/sandbox/update.sh"\n' \
+    "$_ut_proj" >"$_ut_src/install.sh"
+  chmod 755 "$_ut_src/install.sh"
+  _ut_rc=0
+  SANDBOX_TARGET="$_ut_proj" bash "$_ut_proj/tools/sandbox/update.sh" \
+    --from "$_ut_src" 2>/dev/null || _ut_rc=$?
+  check "update: self-overwrite exits 0" 0 "$_ut_rc"
+  rm -rf "$_ut_proj" "$_ut_src"
 }
 
 update_tests

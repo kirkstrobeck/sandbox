@@ -146,7 +146,12 @@ check "bash: git push (SANDBOX_INNER=1)" allow "$(decision_of "$inner")"
 
 echo
 echo "Bash gate — project extra allow is after named denials"
-bash_case deny  'bash tools/dev-start.sh --foo'
+# Control: deny with no extra-allow in scope. Unset to prevent any SANDBOX_EXTRA_ALLOW
+# set in the environment (e.g. from sandbox.conf loaded by the test runner) from leaking in.
+out_deny_ctrl="$(jq -nc --arg c 'bash tools/dev-start.sh --foo' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_ALLOW='' bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: dev-start.sh denied without extra-allow" deny "$(decision_of "$out_deny_ctrl")"
 out="$(jq -nc --arg c 'bash tools/dev-start.sh --foo' \
   '{tool_name:"Bash",tool_input:{command:$c}}' |
   SANDBOX_EXTRA_ALLOW='bash tools/dev-start.sh*' bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
@@ -167,12 +172,18 @@ bash_case allow './sandbox --file tools/sandbox/sandbox.conf'
 bash_case deny  'printf %s x | ./sandbox'
 
 echo
-echo "CLI — unknown single-token verbs"
+echo "CLI — unknown single-token verbs and quoted sentences"
 cli_rc=0
 cli_out="$(bash "$PROJECT_ROOT/sandbox" down 2>&1)" || cli_rc=$?
 check "cli: ./sandbox down exits 2" 2 "$cli_rc"
 check "cli: ./sandbox down names the verb" unknown \
   "$(printf '%s' "$cli_out" | grep -q 'unknown verb: down' && echo unknown || echo other)"
+# A quoted multi-word sentence must NOT trigger unknown-verb; it should reach dispatch.
+# We test only that it does not exit 2 with "unknown verb" — dispatch itself may
+# fail (no container) but that is a different exit path.
+cli_sentence_out="$(timeout 5 bash "$PROJECT_ROOT/sandbox" "add a health check endpoint" 2>&1)" || true
+check "cli: quoted sentence does not print unknown verb" nodispatch \
+  "$(printf '%s' "$cli_sentence_out" | grep -q 'unknown verb' && echo dispatch || echo nodispatch)"
 
 echo
 echo "Claude result extraction — success is not an envelope dump"
@@ -262,6 +273,7 @@ fi
 # shellcheck source=update-test.sh
 . "$SCRIPT_DIR/update-test.sh"
 
+if [ -f "$PROJECT_ROOT/install.sh" ]; then
 echo
 echo "install.sh — dry-run does not change files; no --force refuses foreign files"
 _itmp="$(mktemp -d)"
@@ -281,6 +293,7 @@ check "install: refuses foreign file without --force" nonzero \
 check "install: foreign file present after refusal" present \
   "$([ -f "$_itmp/tools/sandbox/my-project-script.sh" ] && echo present || echo gone)"
 rm -rf "$_itmp"
+fi
 
 echo
 printf '%s passed, %s failed\n' "$pass" "$fail"

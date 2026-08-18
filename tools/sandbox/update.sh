@@ -24,7 +24,9 @@ set -uo pipefail
 UPDATE_CHECK_ENV="${SANDBOX_UPDATE_CHECK:-}"
 AUTOUPDATE_ENV="${SANDBOX_AUTOUPDATE:-}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# When re-exec'd from a temp copy, BASH_SOURCE[0] points at /tmp; the original
+# directory is passed through SANDBOX_SCRIPT_DIR so siblings are still found.
+SCRIPT_DIR="${SANDBOX_SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)}"
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
 # shellcheck source=manifest.sh
@@ -122,14 +124,14 @@ short() { printf '%s' "${1:0:7}"; }
 #   $4  harness_ref        ref from the daily file  (e.g. "main")
 #   $5  origin_repo        repo from ORIGIN.md / resolve_origin
 #   $6  origin_ref         ref from ORIGIN.md / resolve_origin
-#   $7  autoupdate_on      "1" when SANDBOX_AUTOUPDATE is active (default 1)
+#   $7  autoupdate_on      "1" when SANDBOX_AUTOUPDATE is active (default 0)
 #   $8  update_check_off   "1" when SANDBOX_UPDATE_CHECK=0 (kill switch active)
 #   $9  source_repo        "1" when install.sh is at REPO_ROOT (source tree)
 sandbox_autoupdate_should() {
   local harness_sha="$1"  local_commit="$2"
   local harness_repo="$3" harness_ref="$4"
   local origin_repo="$5"  origin_ref="$6"
-  local autoupdate_on="${7:-1}"
+  local autoupdate_on="${7:-0}"
   local update_check_off="${8:-0}"
   local source_repo="${9:-0}"
   [ "$update_check_off" = "1" ] && return 1
@@ -209,7 +211,7 @@ cmd_nudge() {
 
   local autoupdate_on=1 update_check_off=0 source_repo=0
   [ "${UPDATE_CHECK_ENV:-${SANDBOX_UPDATE_CHECK:-1}}" = "0" ] && update_check_off=1
-  [ "${AUTOUPDATE_ENV:-${SANDBOX_AUTOUPDATE:-1}}" = "1" ]     || autoupdate_on=0
+  [ "${AUTOUPDATE_ENV:-${SANDBOX_AUTOUPDATE:-0}}" = "1" ]     || autoupdate_on=0
   [ -f "$REPO_ROOT/install.sh" ]                              && source_repo=1
 
   if sandbox_autoupdate_should \
@@ -324,6 +326,23 @@ write_install_hashes() {
 }
 
 cmd_update() {
+  # install.sh replaces this script underneath the running bash process. Re-exec
+  # from a temp copy now so the rest of this function reads from a stable file.
+  # SANDBOX_UPDATE_REEXEC=1 prevents the temp copy from re-execing again.
+  if [ -z "${SANDBOX_UPDATE_REEXEC:-}" ]; then
+    local _reexec_tmp
+    _reexec_tmp="$(mktemp)"
+    cp "${BASH_SOURCE[0]}" "$_reexec_tmp"
+    chmod 755 "$_reexec_tmp"
+    local _reexec_args=()
+    [ -n "${FORCE:-}"     ] && _reexec_args+=(--force)
+    [ -n "${DRY_RUN:-}"   ] && _reexec_args+=(--dry-run)
+    [ -n "${FROM:-}"      ] && _reexec_args+=(--from "$FROM")
+    [ -n "${REPO_FLAG:-}" ] && _reexec_args+=(--repo "$REPO_FLAG")
+    [ -n "${REF_FLAG:-}"  ] && _reexec_args+=(--ref "$REF_FLAG")
+    SANDBOX_UPDATE_REEXEC=1 SANDBOX_SCRIPT_DIR="$SCRIPT_DIR" exec bash "$_reexec_tmp" "${_reexec_args[@]}"
+  fi
+
   # install.sh at the project root means this IS the starter repo, not a project
   # that installed it — the harness here is the working copy, and overwriting it
   # with upstream would discard exactly the work someone is in the middle of.

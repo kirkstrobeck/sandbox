@@ -463,14 +463,16 @@ that `SANDBOX_UPDATE_CHECK=0 ./sandbox up` is quiet in a project whose
 
 ### `SANDBOX_AUTOUPDATE`
 
-Default `1`. When `SANDBOX_UPDATE_CHECK=1` and the daily snapshot shows a newer
+Default `0`. When `SANDBOX_UPDATE_CHECK=1` and the daily snapshot shows a newer
 harness sha, `./sandbox up` (via `boot.sh`) runs `./sandbox update`
 automatically before starting the container. The update fetches the upstream
 tarball and runs `install.sh` — one download per day at most; subsequent boots
 find the sha matches and return immediately.
 
-Set to `0` to print the nudge line instead of applying the update. The
-environment beats the config file for this setting too (same pattern as
+The default is `0` (off) because autoupdate rewrites host gate scripts
+(`outer-gate.sh`, `outer-write-gate.sh`) without a separate approval step. Set
+to `1` only as an explicit choice. When `0`, a nudge line is printed instead.
+The environment beats the config file for this setting too (same pattern as
 `SANDBOX_UPDATE_CHECK`). `SANDBOX_UPDATE_CHECK=0` overrides this and suppresses
 both.
 

@@ -273,9 +273,11 @@ it — one env var instead of a web search.
 
 The `harness_sha` key drives autoupdate: `./sandbox up` (via `boot.sh`) reads
 the sha from the daily file and compares it to `SANDBOX_ORIGIN_COMMIT`. If they
-differ and `SANDBOX_AUTOUPDATE=1` (the default), `update.sh` fetches and
-installs the new harness before the container starts. Set `SANDBOX_AUTOUPDATE=0`
-to print a nudge line instead, or `SANDBOX_UPDATE_CHECK=0` to disable both.
+differ and `SANDBOX_AUTOUPDATE=1`, `update.sh` fetches and installs the new
+harness before the container starts. The default is `0` (off) — autoupdate
+rewrites host gate scripts without a separate approval step, so it requires an
+explicit opt-in. Set `SANDBOX_UPDATE_CHECK=0` to disable both the nudge and
+autoupdate.
 
 Nothing about it is mounted, and it must stay that way. The container does not
 see `$TMPDIR`; it sees an environment variable holding today's text. That is the
