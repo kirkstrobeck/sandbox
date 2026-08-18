@@ -179,11 +179,19 @@ check "cli: ./sandbox down exits 2" 2 "$cli_rc"
 check "cli: ./sandbox down names the verb" unknown \
   "$(printf '%s' "$cli_out" | grep -q 'unknown verb: down' && echo unknown || echo other)"
 # A quoted multi-word sentence must NOT trigger unknown-verb; it should reach dispatch.
-# We test only that it does not exit 2 with "unknown verb" — dispatch itself may
-# fail (no container) but that is a different exit path.
-cli_sentence_out="$(timeout 5 bash "$PROJECT_ROOT/sandbox" "add a health check endpoint" 2>&1)" || true
+# Use a temp launcher copy with a stub dispatch.sh so the real dispatcher (which does
+# pkill claude and starts a container) is never reached during testing.
+_cli_tmp="$(mktemp -d)"
+mkdir -p "$_cli_tmp/tools/sandbox"
+cp "$PROJECT_ROOT/sandbox" "$_cli_tmp/sandbox"
+printf '#!/usr/bin/env bash\necho DISPATCH\nexit 0\n' >"$_cli_tmp/tools/sandbox/dispatch.sh"
+chmod 755 "$_cli_tmp/tools/sandbox/dispatch.sh"
+cli_sentence_out="$(bash "$_cli_tmp/sandbox" "add a health check endpoint" 2>&1)" || true
 check "cli: quoted sentence does not print unknown verb" nodispatch \
   "$(printf '%s' "$cli_sentence_out" | grep -q 'unknown verb' && echo dispatch || echo nodispatch)"
+check "cli: quoted sentence reaches dispatch" DISPATCH \
+  "$(printf '%s' "$cli_sentence_out" | grep -q 'DISPATCH' && echo DISPATCH || echo missing)"
+rm -rf "$_cli_tmp"
 
 echo
 echo "Claude result extraction — success is not an envelope dump"
