@@ -136,6 +136,7 @@ them is defensible without adding controls that are not in the box.
 | Loopback ports by default | `sandbox.conf` | `SANDBOX_PORTS="127.0.0.1:3000:3000"` |
 | Daily snapshot stays host-side | [`model-daily.sh`](../tools/sandbox/model-daily.sh) | Written on the host, `chmod 600`, `mktemp` + `mv`, no history, no credentials in it. Carries the upstream harness sha (public git sha, not a secret). It is **not** in `run-args.sh` — the text crosses as one environment variable and the path does not cross at all |
 | Hook wiring check | `./sandbox doctor` | Warns when `.claude/settings.json` does not reference `outer-gate.sh` — i.e. when the outer agent can still act on the host |
+| Project deny hooks | `tools/sandbox/outer-gate-deny.d/`, `outer-write-gate-deny.d/`, `SANDBOX_EXTRA_DENY` | `*.sh` files defining `outer_gate_deny_*` / `outer_write_gate_deny_*` functions; survive `./sandbox update`; evaluated before every allow branch; fail-open (syntax errors skipped, surfaced in `./sandbox doctor`) |
 
 Details: [docs/agents.md](agents.md) for the gates and the client-by-client
 enforcement story, [docs/credentials.md](credentials.md) for every credential

@@ -187,6 +187,19 @@ else
   warn "Cursor hooks not wired in .cursor/hooks.json — Cursor outer agent is not enforced"
 fi
 
+# Warn about deny.d files with syntax errors (they are silently skipped by the gate).
+for _doctor_deny_d in \
+    "$REPO_ROOT/tools/sandbox/outer-gate-deny.d" \
+    "$REPO_ROOT/tools/sandbox/outer-write-gate-deny.d"; do
+  [ -d "$_doctor_deny_d" ] || continue
+  for _doctor_deny_f in "$_doctor_deny_d"/*.sh; do
+    [ -f "$_doctor_deny_f" ] || continue
+    if ! bash -n "$_doctor_deny_f" >/dev/null 2>&1; then
+      warn "deny.d file has syntax error (skipped by gate): $_doctor_deny_f"
+    fi
+  done
+done
+
 echo
 [ "$fails" -eq 0 ] && { echo "Ready. Run: ./sandbox \"hello\""; exit 0; }
 echo "$fails blocking problem(s) above."

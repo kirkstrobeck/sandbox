@@ -71,6 +71,18 @@ not good enough after an edit.
 If you get a denial, you have not found an obstacle. You have found the design.
 Dispatch instead.
 
+**Adding project denies that survive harness updates.** Editing `outer-gate.sh`
+directly works until the next `./sandbox update` replaces it. The durable seam
+is `tools/sandbox/outer-gate-deny.d/`: drop a `*.sh` file there defining
+functions whose names start with `outer_gate_deny_`. Each function receives the
+stripped command as `$1`; call `deny "reason"` to deny, return 0 to skip. The
+directory and its `*.sh` files are never touched by updates. For a smaller
+number of patterns, `SANDBOX_EXTRA_DENY` in `sandbox.conf` also survives
+updates. Both are evaluated before every allow branch; `SANDBOX_EXTRA_ALLOW`
+cannot override them. The write-gate equivalent is
+`tools/sandbox/outer-write-gate-deny.d/` with `outer_write_gate_deny_*`
+functions receiving the resolved absolute path.
+
 ## Codex: instructed, not enforced
 
 Codex reads `AGENTS.md` at the repo root, which is why the outer-agent rules

@@ -238,6 +238,28 @@ bash tools/ci-check.sh
 This is how a project adds its own harness scripts to the outer allowlist without
 forking `outer-gate.sh`.
 
+### `SANDBOX_EXTRA_DENY`
+
+Default empty. Extra glob patterns that **deny** commands before any allow
+branch is evaluated. Evaluated after named harness denials (so `git`,
+`pnpm`, `rm`, `ssh` keep their specific reasons) and before every allow
+branch — including `SANDBOX_EXTRA_ALLOW`. A pattern in `SANDBOX_EXTRA_ALLOW`
+cannot override a match in `SANDBOX_EXTRA_DENY`.
+
+```bash
+SANDBOX_EXTRA_DENY="
+bash tools/candidates/*
+"
+```
+
+For denies that must survive a `./sandbox update`, use
+`tools/sandbox/outer-gate-deny.d/` instead — globs in this variable are read
+from the config file which is preserved, but the variable is the simpler
+option for a small number of patterns.
+
+The write-gate equivalent is `tools/sandbox/outer-write-gate-deny.d/` (no
+config variable; project hooks only).
+
 ## Path variables inside vs outside the container
 
 Two variables name the same directory but mean different things:

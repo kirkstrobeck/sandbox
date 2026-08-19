@@ -234,6 +234,13 @@ fi
   kept "tools/sandbox/.cache/ (credentials and run state)"
 [ -f "$TARGET/tools/sandbox/sandbox.local.conf" ] &&
   kept "tools/sandbox/sandbox.local.conf"
+mkdir -p "$TARGET/tools/sandbox/outer-gate-deny.d" \
+         "$TARGET/tools/sandbox/outer-write-gate-deny.d" 2>/dev/null || true
+for _deny_d_rel in tools/sandbox/outer-gate-deny.d tools/sandbox/outer-write-gate-deny.d; do
+  if [ -n "$(find "$TARGET/$_deny_d_rel" -name '*.sh' 2>/dev/null)" ]; then
+    kept "$_deny_d_rel/ (project deny hooks; contents survive updates)"
+  fi
+done
 :
 
 # --- where this came from ---------------------------------------------------

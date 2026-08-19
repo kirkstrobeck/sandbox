@@ -61,6 +61,41 @@ case "$first" in
     deny "Network access belongs to the inner agent. $DISPATCH_MSG" ;;
 esac
 
+# --- Project deny hooks (evaluated before every allow) ----------------------
+# ORDER (must not be changed without updating this comment):
+#   1. gate_bypass_if_inner — inner must still run fleet scripts
+#   2. Named harness denials above (git/pnpm/rm/ssh) — so their reasons stay
+#   3. SANDBOX_EXTRA_DENY globs (this block) — before every allow branch
+#   4. outer-gate-deny.d hooks (this block) — project *.sh, survive updates
+#   5. All allow branches below (bash tools/sandbox/*, ./sandbox, docker, …)
+#   extra-allow cannot override extra-deny.
+
+# SANDBOX_EXTRA_DENY: project globs evaluated before allow branches.
+if gate_extra_deny_matches "$stripped"; then
+  deny "project deny rule matched. $DISPATCH_MSG"
+fi
+
+# outer-gate-deny.d: source every *.sh and call outer_gate_deny_* functions.
+# Fail-open: a syntax-error or source-error file is skipped, not fatal.
+# doctor.sh surfaces skipped files as warnings.
+_ogdeny_d="$SCRIPT_DIR/outer-gate-deny.d"
+if [ -d "$_ogdeny_d" ]; then
+  _ogdeny_called=""
+  for _ogdeny_f in "$_ogdeny_d"/*.sh; do
+    [ -f "$_ogdeny_f" ] || continue
+    bash -n "$_ogdeny_f" >/dev/null 2>&1 || continue
+    . "$_ogdeny_f" 2>/dev/null || continue
+    while IFS= read -r _ogdeny_fn; do
+      [ -z "$_ogdeny_fn" ] && continue
+      case " $_ogdeny_called " in *" $_ogdeny_fn "*) continue ;; esac
+      _ogdeny_called="$_ogdeny_called $_ogdeny_fn"
+      "$_ogdeny_fn" "$stripped" 2>/dev/null || true
+    done <<OGDENYFNS
+$(declare -F | awk '$3 ~ /^outer_gate_deny_/ {print $3}')
+OGDENYFNS
+  done
+fi
+
 # --- Allowed: driving and inspecting the sandbox itself ---------------------
 case "$stripped" in
   bash\ "$SCRIPT_DIR"/*|bash\ tools/sandbox/*|./tools/sandbox/*)
