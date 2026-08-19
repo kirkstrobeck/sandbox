@@ -11,7 +11,7 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export SANDBOX_GATE_FORCE=1
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+export PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 
 pass=0
 fail=0
@@ -219,6 +219,123 @@ bash_case allow './sandbox --file tools/sandbox/sandbox.conf'
 bash_case deny  'printf %s x | ./sandbox'
 
 echo
+echo "Bash gate — SANDBOX_EXTRA_DENY globs"
+out_xd1="$(jq -nc --arg c 'bash tools/candidates/run.sh' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='bash tools/candidates/*' SANDBOX_EXTRA_ALLOW='' \
+  bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: extra-deny denies the glob" deny "$(decision_of "$out_xd1")"
+
+out_xd2="$(jq -nc --arg c 'bash tools/candidates/run.sh' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='bash tools/candidates/*' SANDBOX_EXTRA_ALLOW='bash tools/*' \
+  bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: extra-deny wins over extra-allow" deny "$(decision_of "$out_xd2")"
+
+out_xd3="$(jq -nc --arg c 'bash tools/dev-start.sh --foo' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='bash tools/candidates/*' SANDBOX_EXTRA_ALLOW='bash tools/dev-start.sh*' \
+  bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: extra-allow still allows when extra-deny does not match" allow "$(decision_of "$out_xd3")"
+
+out_xd4="$(jq -nc --arg c 'git status' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='' SANDBOX_EXTRA_ALLOW='git*' \
+  bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: git still denied with extra-allow git*" deny "$(decision_of "$out_xd4")"
+
+inner_xd="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
+  'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"bash tools/candidates/run.sh\"}}" |
+   SANDBOX_EXTRA_DENY="bash tools/candidates/*" bash "$0"' \
+  "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "bash: SANDBOX_INNER bypasses extra-deny" allow "$(decision_of "$inner_xd")"
+
+cursor_xd="$(jq -nc --arg c 'bash tools/candidates/run.sh' '{command:$c}' |
+  GATE_PROTOCOL=cursor SANDBOX_EXTRA_DENY='bash tools/candidates/*' \
+  bash "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
+check "cursor: extra-deny emits {permission:deny}" deny "$(cursor_decision_of "$cursor_xd")"
+
+echo
+echo "Bash gate — outer-gate-deny.d hooks"
+_ogd_tmp="$(mktemp -d)"
+mkdir -p "$_ogd_tmp/outer-gate-deny.d"
+# Copy gate scripts to temp dir so SCRIPT_DIR points there
+cp "$SCRIPT_DIR/outer-gate.sh" "$SCRIPT_DIR/gate-lib.sh" "$_ogd_tmp/"
+cat >"$_ogd_tmp/outer-gate-deny.d/fleet.sh" <<'FLEETEOF'
+outer_gate_deny_fleet() {
+  case "$1" in
+    bash\ tools/candidates/*) deny "fleet" ;;
+  esac
+}
+FLEETEOF
+out_fleet="$(jq -nc --arg c 'bash tools/candidates/run.sh' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='' SANDBOX_EXTRA_ALLOW='' \
+  bash "$_ogd_tmp/outer-gate.sh" 2>/dev/null)"
+check "bash: deny.d fleet hook denies fleet command" deny "$(decision_of "$out_fleet")"
+
+out_fleet_sb="$(jq -nc --arg c './sandbox "x"' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='' SANDBOX_EXTRA_ALLOW='' \
+  bash "$_ogd_tmp/outer-gate.sh" 2>/dev/null)"
+check "bash: deny.d fleet hook does not deny ./sandbox" allow "$(decision_of "$out_fleet_sb")"
+
+out_fleet_pwd="$(jq -nc --arg c 'pwd' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='' SANDBOX_EXTRA_ALLOW='' \
+  bash "$_ogd_tmp/outer-gate.sh" 2>/dev/null)"
+check "bash: deny.d fleet hook does not deny pwd" allow "$(decision_of "$out_fleet_pwd")"
+
+# Syntax error file is skipped; gate still works
+printf '#!/bin/bash\nthis is not "valid bash\n' \
+  >"$_ogd_tmp/outer-gate-deny.d/broken.sh"
+out_broken="$(jq -nc --arg c 'pwd' \
+  '{tool_name:"Bash",tool_input:{command:$c}}' |
+  SANDBOX_EXTRA_DENY='' SANDBOX_EXTRA_ALLOW='' \
+  bash "$_ogd_tmp/outer-gate.sh" 2>/dev/null)"
+check "bash: syntax-error deny.d file skipped; pwd still allows" allow "$(decision_of "$out_broken")"
+
+# inner bypass still wins even with deny.d
+inner_fleet="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
+  'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"bash tools/candidates/run.sh\"}}" |
+   SANDBOX_EXTRA_DENY="" bash "$0"' \
+  "$_ogd_tmp/outer-gate.sh" 2>/dev/null)"
+check "bash: SANDBOX_INNER bypasses deny.d hooks" allow "$(decision_of "$inner_fleet")"
+
+rm -rf "$_ogd_tmp"
+
+echo
+echo "Write gate — outer-write-gate-deny.d hooks"
+_wgd_tmp="$(mktemp -d)"
+mkdir -p "$_wgd_tmp/outer-write-gate-deny.d"
+cp "$SCRIPT_DIR/outer-write-gate.sh" "$SCRIPT_DIR/gate-lib.sh" "$_wgd_tmp/"
+cat >"$_wgd_tmp/outer-write-gate-deny.d/protect.sh" <<PROTEOF
+outer_write_gate_deny_conf() {
+  case "\$1" in
+    "$PROJECT_ROOT/tools/sandbox/sandbox.conf") deny "protected by project rule" ;;
+  esac
+}
+PROTEOF
+out_wgd_deny="$(jq -nc --arg p "$PROJECT_ROOT/tools/sandbox/sandbox.conf" \
+  '{tool_name:"Edit",tool_input:{file_path:$p}}' |
+  bash "$_wgd_tmp/outer-write-gate.sh" 2>/dev/null)"
+check "write: deny.d rule denies sandbox.conf" deny "$(decision_of "$out_wgd_deny")"
+
+out_wgd_other="$(jq -nc --arg p "$PROJECT_ROOT/tools/sandbox/gate-lib.sh" \
+  '{tool_name:"Edit",tool_input:{file_path:$p}}' |
+  bash "$_wgd_tmp/outer-write-gate.sh" 2>/dev/null)"
+check "write: deny.d rule does not deny other harness writes" allow "$(decision_of "$out_wgd_other")"
+
+inner_wgd="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
+  'jq -nc --arg p "'"$PROJECT_ROOT/tools/sandbox/sandbox.conf"'" \
+    "{tool_name:\"Edit\",tool_input:{file_path:\$p}}" |
+   bash "$0"' \
+  "$_wgd_tmp/outer-write-gate.sh" 2>/dev/null)"
+check "write: SANDBOX_INNER bypasses write-gate deny.d" allow "$(decision_of "$inner_wgd")"
+
+rm -rf "$_wgd_tmp"
+
+echo
 echo "CLI — unknown single-token verbs and quoted sentences"
 cli_rc=0
 cli_out="$(bash "$PROJECT_ROOT/sandbox" down 2>&1)" || cli_rc=$?
@@ -304,6 +421,8 @@ else
   done <<EOF
 $(cd "$PROJECT_ROOT" && find tools/sandbox -type f \
     ! -path 'tools/sandbox/.cache/*' \
+    ! -path 'tools/sandbox/outer-gate-deny.d/*.sh' \
+    ! -path 'tools/sandbox/outer-write-gate-deny.d/*.sh' \
     ! -name 'sandbox.local.conf' ! -name 'sandbox.conf.new' ! -name 'ORIGIN.md' \
     ! -name '.install-hashes' 2>/dev/null | sort)
 EOF

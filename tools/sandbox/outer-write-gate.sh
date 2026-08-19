@@ -127,9 +127,31 @@ if [ -z "$paths" ]; then
   deny "Could not read a file path from this $tool call, so it cannot be judged. $DISPATCH_MSG"
 fi
 
+# Load project write-gate deny hooks once before iterating paths.
+# ORDER: after gate_bypass_if_inner; before gate_is_allowed allows anything.
+# A project can deny a path the harness would allow. inner always bypasses first.
+# Fail-open: syntax-error or source-error files are skipped (doctor.sh warns).
+_wgdeny_d="$SCRIPT_DIR/outer-write-gate-deny.d"
+if [ -d "$_wgdeny_d" ]; then
+  for _wgdeny_f in "$_wgdeny_d"/*.sh; do
+    [ -f "$_wgdeny_f" ] || continue
+    bash -n "$_wgdeny_f" >/dev/null 2>&1 || continue
+    . "$_wgdeny_f" 2>/dev/null || continue
+  done
+fi
+
 while IFS= read -r raw; do
   [ -z "$raw" ] && continue
   resolved="$(gate_resolve "$raw")"
+  # Run project write-gate deny hooks before harness allowlist.
+  if [ -d "$_wgdeny_d" ]; then
+    while IFS= read -r _wgdeny_fn; do
+      [ -z "$_wgdeny_fn" ] && continue
+      "$_wgdeny_fn" "$resolved" 2>/dev/null || true
+    done <<WGDENYFNS
+$(declare -F | awk '$3 ~ /^outer_write_gate_deny_/ {print $3}')
+WGDENYFNS
+  fi
   if ! gate_is_allowed "$resolved"; then
     deny "Editing $resolved on the host is the inner agent's job. $DISPATCH_MSG"
   fi

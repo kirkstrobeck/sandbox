@@ -7,7 +7,7 @@
 # path gets hardened, the Edit path is forgotten, and the agent walks through it.
 
 GATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-PROJECT_ROOT="$(cd "$GATE_DIR/../.." && pwd -P)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$GATE_DIR/../.." && pwd -P)}"
 
 DISPATCH_MSG='Do not run this on the host. Dispatch: ./sandbox "<message>" or ./sandbox -c "<message>". See AGENTS.md.'
 
@@ -76,18 +76,23 @@ _gate_trim() {
   printf '%s' "$s"
 }
 
-gate_extra_allow_patterns() {
-  if [ -n "${SANDBOX_EXTRA_ALLOW:-}" ]; then
-    printf '%s\n' "$SANDBOX_EXTRA_ALLOW"
+# Parametrized extractor: reads VARNAME from env (wins) or parses conf files.
+# Never source the conf — a $(git ...) there would fork on every Bash tool call.
+gate_extra_conf_patterns() {
+  local varname="$1"
+  local envval
+  eval "envval=\"\${${varname}:-}\""
+  if [ -n "$envval" ]; then
+    printf '%s\n' "$envval"
     return 0
   fi
   local file
   for file in "$PROJECT_ROOT/tools/sandbox/sandbox.conf" \
               "$PROJECT_ROOT/tools/sandbox/sandbox.local.conf"; do
     [ -r "$file" ] || continue
-    awk '
-      $0 ~ /^[[:space:]]*SANDBOX_EXTRA_ALLOW=/ {
-        sub(/^[[:space:]]*SANDBOX_EXTRA_ALLOW=/, "")
+    awk -v VAR="$varname" '
+      $0 ~ ("^[[:space:]]*" VAR "=") {
+        sub("^[[:space:]]*" VAR "=", "")
         if ($0 ~ /^"/) {
           sub(/^"/, "")
           if ($0 ~ /"$/) { sub(/"$/, ""); print; next }
@@ -105,6 +110,9 @@ gate_extra_allow_patterns() {
   done
 }
 
+gate_extra_allow_patterns() { gate_extra_conf_patterns SANDBOX_EXTRA_ALLOW; }
+gate_extra_deny_patterns()  { gate_extra_conf_patterns SANDBOX_EXTRA_DENY;  }
+
 gate_extra_allow_matches() {
   local stripped="$1" pat
   while IFS= read -r pat; do
@@ -116,6 +124,21 @@ gate_extra_allow_matches() {
     esac
   done <<EOF
 $(gate_extra_allow_patterns)
+EOF
+  return 1
+}
+
+gate_extra_deny_matches() {
+  local stripped="$1" pat
+  while IFS= read -r pat; do
+    pat="$(_gate_trim "$pat")"
+    [ -z "$pat" ] && continue
+    case "$pat" in \#*) continue ;; esac
+    case "$stripped" in
+      $pat) return 0 ;;
+    esac
+  done <<EOF
+$(gate_extra_deny_patterns)
 EOF
   return 1
 }
