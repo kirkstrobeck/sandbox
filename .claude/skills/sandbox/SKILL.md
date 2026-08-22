@@ -50,6 +50,8 @@ in; the next dispatch re-bridges it. You cannot sign in for them. For Cursor
 specifically, a login-only credential cannot refresh inside the container —
 `CURSOR_API_KEY` is the fix if it keeps happening.
 
+**Credential expiry warnings.** `WARN: … credential expires in ~Nh` printed during boot or dispatch means you have roughly that long before the next dispatch will fail with an auth error. Re-auth on the Mac before you hit the deadline. `./sandbox doctor` shows current expiry state for all credentials. Set `SANDBOX_AUTH_WARN_HOURS` in `sandbox.conf` to change the lead time (default 12 hours). For Cursor login-only tokens with no expiry info, prefer `CURSOR_API_KEY` for unattended runs.
+
 **`git push` fails inside the container.** The GitHub token didn't bridge. The
 human runs `gh auth login` on the Mac, then `./sandbox up` re-syncs it. No SSH
 key is ever mounted — this is a scoped, revocable token by design.

@@ -13,6 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/run-args.sh"
 # shellcheck source=dev-fs.sh
 . "$SCRIPT_DIR/dev-fs.sh"
+# shellcheck source=credential-expiry.sh
+. "$SCRIPT_DIR/credential-expiry.sh"
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -110,6 +112,11 @@ prepare_cache() {
     touch "$CACHE_DIR/stamps/.cred-synced-$agent"
   fi
   bash "$SCRIPT_DIR/github-token-sync.sh" >&2 || log "WARN: git push from inside the sandbox will not work."
+  if [ -z "$agent" ]; then
+    credential_expiry_check_all
+  else
+    credential_expiry_warn "$agent"
+  fi
 }
 
 container_exists() { docker inspect "$SANDBOX_NAME" >/dev/null 2>&1; }

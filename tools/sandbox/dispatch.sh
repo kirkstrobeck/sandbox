@@ -40,6 +40,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/dispatch-amp.sh"
 # shellcheck source=dispatch-opencode.sh
 . "$SCRIPT_DIR/dispatch-opencode.sh"
+# shellcheck source=credential-expiry.sh
+. "$SCRIPT_DIR/credential-expiry.sh"
 
 RUN_DIR="$CACHE_DIR/run"
 RUN_DIR_CTR="/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/.cache/run"
@@ -130,6 +132,7 @@ fi
 
 _t_dispatch_start="$(sandbox_now_ms)"
 require_agent_credential "$agent" || exit 1
+credential_expiry_warn "$agent"
 
 # Today's model/plan/promo snapshot, fetched at most once a day for every
 # sandbox on this machine. It stays on the host — the text is handed to the

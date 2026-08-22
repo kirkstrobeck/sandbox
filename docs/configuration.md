@@ -501,6 +501,16 @@ The environment beats the config file for this setting too (same pattern as
 `SANDBOX_UPDATE_CHECK`). `SANDBOX_UPDATE_CHECK=0` overrides this and suppresses
 both.
 
+### `SANDBOX_AUTH_WARN_HOURS`
+
+Default: `12`
+
+How many hours before credential expiry the sandbox should start warning. Applies to OAuth tokens (Claude, Cursor login-only, GitHub OAuth) where expiry can be determined. Set to `0` to suppress warnings.
+
+```bash
+SANDBOX_AUTH_WARN_HOURS="24"
+```
+
 ## Environment variables, not in the file
 
 | Variable | Effect |
