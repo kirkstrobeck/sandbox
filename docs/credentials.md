@@ -270,5 +270,21 @@ bash tools/sandbox/opencode-token-sync.sh status   # OpenCode: config dir popula
 | Logged out on the Mac after a long run | The push-back did not land. `token-sync.sh status` shows which side is newer; signing in on the Mac is always safe. |
 | `doctor` fails on `.cache is NOT gitignored` | Add `tools/sandbox/.cache/` to `.gitignore` before anything else. |
 
+## Expiry warnings
+
+The sandbox warns when a bridged credential will expire within the next 12 hours (configurable with `SANDBOX_AUTH_WARN_HOURS` — see [configuration](configuration.md)). Warnings appear on stderr during `./sandbox up` and before each dispatch.
+
+**Claude** — the OAuth token's `expiresAt` field is read and compared. Tokens rotate on every refresh, so the newest copy (Keychain or file, whichever refreshed last) is used.
+
+**Cursor login-only** — the access token is a short-lived JWT. The sandbox decodes it to find the expiry. If expiry cannot be determined (no JWT, unknown format), doctor warns that expiry is unknown and recommends `CURSOR_API_KEY` for unattended runs.
+
+**Codex** — auth.json only carries `last_refresh`, not an explicit expiry. The sandbox cannot determine when the token expires without knowing the server-side lifetime, so no expiry warning is issued for Codex.
+
+**GitHub / Copilot** — expiry is reported when `gh auth status` exposes it. Tokens set via `GH_TOKEN` or `GITHUB_TOKEN` environment variables carry no expiry metadata and are not checked.
+
+**API-key agents** (agy, Amp, OpenCode) — API keys are non-expiring; no warning is issued.
+
+To suppress repeated warnings during a tight dispatch loop, each service's warning is deduplicated to at most once per hour via a stamp in `.cache/stamps/`. `./sandbox doctor` always shows the current expiry state regardless of the dedup stamp.
+
 You cannot sign in on the human's behalf from inside the container — the
 credential has to be created on the Mac and bridged in.

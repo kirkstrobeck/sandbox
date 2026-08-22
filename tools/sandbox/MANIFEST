@@ -5,7 +5,7 @@
 # Bump `version` whenever the set of paths changes. It is not used for
 # comparison — the path lists are — but it gives a human something to point at.
 
-version 6
+version 7
 
 # Modes
 #
@@ -73,6 +73,8 @@ replace  tools/sandbox/tail.sh
 replace  tools/sandbox/token-sync.sh
 replace  tools/sandbox/update.sh
 replace  tools/sandbox/update-test.sh
+replace  tools/sandbox/credential-expiry.sh
+replace  tools/sandbox/credential-expiry-test.sh
 
 # Reference documentation for the harness, not project prose, so it tracks the
 # harness version rather than being preserved.

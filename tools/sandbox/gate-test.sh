@@ -446,6 +446,8 @@ fi
 # Autoupdate predicate: sandbox_autoupdate_should and update.sh syntax.
 # shellcheck source=update-test.sh
 . "$SCRIPT_DIR/update-test.sh"
+# shellcheck source=credential-expiry-test.sh
+. "$SCRIPT_DIR/credential-expiry-test.sh"
 
 echo
 echo "Wave 1 agents — require_agent_credential is wired"

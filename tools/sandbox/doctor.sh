@@ -18,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/run-args.sh"
 # shellcheck source=colima.sh
 . "$SCRIPT_DIR/colima.sh"
+# shellcheck source=credential-expiry.sh
+. "$SCRIPT_DIR/credential-expiry.sh"
 
 fails=0
 ok()   { printf '  ok    %s\n' "$*"; }
@@ -46,14 +48,36 @@ else
   bad "not reachable — colima start $(colima_start_flags)"
 fi
 
+_doctor_expiry() {
+  local service="$1"
+  local exp hours_left at now
+  exp="$(credential_expiry_epoch "$service")"
+  [ -z "$exp" ] && return
+  now="$(date +%s)"
+  at="$(_ce_format_epoch "$exp")"
+  if [ "$((exp - now))" -le 0 ]; then
+    warn "$(_ce_service_label "$service") credential EXPIRED ($at) — $(_ce_fix_message "$service")"
+  else
+    hours_left=$(( (exp - now + 3599) / 3600 ))
+    local warn_h
+    warn_h="$(credential_expiry_warn_hours)"
+    if [ "$hours_left" -le "$warn_h" ]; then
+      warn "$(_ce_service_label "$service") credential expires in ~${hours_left}h ($at) — $(_ce_fix_message "$service")"
+    else
+      ok "$(_ce_service_label "$service") credential expires in ~${hours_left}h ($at)"
+    fi
+  fi
+}
 echo "credentials"
 if security find-generic-password -s "Claude Code-credentials" -w >/dev/null 2>&1; then
   ok "Claude Code (macOS Keychain)"
 else
   warn "no Claude credential — run 'claude' on the Mac and sign in"
 fi
+_doctor_expiry claude
 [ -f "$HOME/.codex/auth.json" ] && ok "Codex (~/.codex/auth.json)" \
   || warn "no Codex credential — run 'codex login' on the Mac"
+_doctor_expiry codex
 if [ -n "${CURSOR_API_KEY:-}" ]; then
   ok "Cursor (CURSOR_API_KEY in the environment)"
 elif security find-generic-password -s "cursor-access-token" -a "cursor-user" -w >/dev/null 2>&1; then
@@ -63,6 +87,7 @@ elif [ -f "$HOME/.cursor/auth.json" ]; then
 else
   warn "no Cursor credential — run 'agent login' on the Mac, or export CURSOR_API_KEY"
 fi
+_doctor_expiry cursor
 if [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ] || gh auth token >/dev/null 2>&1; then
   ok "GitHub token available (git push will work inside the sandbox)"
   ok "Copilot (reuses GitHub token)"
@@ -70,6 +95,7 @@ else
   warn "no GitHub token — run 'gh auth login' if the inner agent needs to push"
   warn "no Copilot credential — Copilot reuses the GitHub token; run 'gh auth login'"
 fi
+_doctor_expiry github
 if [ -n "${AGY_API_KEY:-${GEMINI_API_KEY:-}}" ]; then
   ok "agy / Antigravity (AGY_API_KEY or GEMINI_API_KEY in environment)"
 elif [ -d "$HOME/.gemini" ] && [ -n "$(ls -A "$HOME/.gemini" 2>/dev/null)" ]; then
