@@ -199,7 +199,7 @@ sandbox_timing "agent-md" "$_t_agentmd_start" "$(sandbox_now_ms)"
 
 mkdir -p "$RUN_DIR"
 printf '%s' "$message" >"$RUN_DIR/msg"
-rm -f "$RUN_DIR/last.json" "$RUN_DIR/last.txt" "$RUN_DIR/last.jsonl"
+rm -f "$RUN_DIR/last.json" "$RUN_DIR/last.txt" "$RUN_DIR/last.jsonl" "$RUN_DIR/last.err"
 
 echo "→ $agent (manager)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} ..." >&2
 

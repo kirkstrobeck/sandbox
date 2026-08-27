@@ -168,12 +168,19 @@ conventions. They do *not* share a model — see below.
 Nobody is asked. The outer client leaves fingerprints in the environment of
 every command it runs, and `tools/sandbox/agent.sh` reads them:
 
-1. `SANDBOX_AGENT` if set — `codex`, `claude`, `cursor`, `copilot`, `agy`,
-   `amp`, or `opencode`; anything else is an error.
-2. **Codex**, if any `CODEX_*` variable exists or `TERM_PROGRAM=codex`.
-3. **Claude**, if `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, or
+1. **Codex**, if any `CODEX_*` variable exists or `TERM_PROGRAM=codex`.
+2. **Claude**, if `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, or
    `CLAUDE_AGENT_SDK_VERSION` is set.
-4. **Cursor**, if `CURSOR_AGENT` or `CURSOR_TRACE_ID` is set.
+3. **Cursor**, if `CURSOR_AGENT` or `CURSOR_TRACE_ID` is set.
+
+When any of those match, that is the inner agent — period. A mismatched
+`SANDBOX_AGENT` or `./sandbox -a` is rejected with an error; you cannot cross
+products.
+
+When nothing is detected:
+
+4. `SANDBOX_AGENT` if set — `codex`, `claude`, `cursor`, `copilot`, `agy`,
+   `amp`, or `opencode`; anything else is an error.
 5. A prompt, but only when stdin and stdout are both terminals — a script cannot
    answer, and blocking on a prompt nobody will ever answer is worse than
    picking a default.
@@ -192,8 +199,10 @@ CLI sets it in the environment of every shell command its agent runs.
 in-editor agent. `TERM_PROGRAM` is no help: Cursor is a VS Code fork and reports
 itself as `vscode`, which is what real VS Code reports too.
 
-Override for one run with `./sandbox -a cursor "task"`, or permanently with
-`SANDBOX_DEFAULT_AGENT`. Whichever is chosen, `require_agent_credential` pulls
+Use `./sandbox -a cursor "task"` only when no outer fingerprint is present — a
+bare terminal with nothing to detect. It is not a way to cross products; a
+mismatch is rejected. Set `SANDBOX_DEFAULT_AGENT` for a permanent default when
+detection does not apply. Whichever is chosen, `require_agent_credential` pulls
 that agent's credential before the container starts, so a missing login fails on
 the Mac with the command that fixes it instead of failing later inside the
 container. See [credentials.md](credentials.md).

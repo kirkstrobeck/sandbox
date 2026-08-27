@@ -15,16 +15,9 @@
 # Nobody is asked. The outer client leaves its fingerprints in the environment
 # of every command it runs, and that is what gets read.
 
-resolve_sandbox_agent() {
-  local allow_prompt="${1:-noprompt}"
-
-  if [ -n "${SANDBOX_AGENT:-}" ]; then
-    case "$SANDBOX_AGENT" in
-      codex|claude|cursor|copilot|agy|amp|opencode) printf '%s\n' "$SANDBOX_AGENT"; return 0 ;;
-      *) echo "SANDBOX_AGENT must be one of: codex, claude, cursor, copilot, agy, amp, opencode — got '$SANDBOX_AGENT'." >&2; return 2 ;;
-    esac
-  fi
-
+# Returns codex, claude, or cursor from outer fingerprints only. Prints nothing
+# and returns nonzero when no outer agent is detected.
+detect_outer_agent() {
   # Codex is checked FIRST on purpose. Some Codex installs inherit unrelated
   # CLAUDE_* tuning variables from a shell profile, so looking for those first
   # would misidentify a Codex session as a Claude one.
@@ -48,6 +41,38 @@ resolve_sandbox_agent() {
   # reports itself as `vscode`, which is also what real VS Code reports.
   if [ -n "${CURSOR_AGENT:-}" ] || [ -n "${CURSOR_TRACE_ID:-}" ]; then
     printf 'cursor\n'
+    return 0
+  fi
+  return 1
+}
+
+resolve_sandbox_agent() {
+  local allow_prompt="${1:-noprompt}"
+  local outer=""
+
+  outer="$(detect_outer_agent 2>/dev/null)" || outer=""
+
+  if [ -n "${SANDBOX_AGENT:-}" ]; then
+    case "$SANDBOX_AGENT" in
+      codex|claude|cursor|copilot|agy|amp|opencode) ;;
+      *) echo "SANDBOX_AGENT must be one of: codex, claude, cursor, copilot, agy, amp, opencode — got '$SANDBOX_AGENT'." >&2; return 2 ;;
+    esac
+    if [ -n "$outer" ] && [ "$SANDBOX_AGENT" != "$outer" ]; then
+      echo "error: outer agent is $outer but SANDBOX_AGENT/-a requested $SANDBOX_AGENT." >&2
+      echo "The inner agent must be the same product as the outer one." >&2
+      echo "Drop -a / unset SANDBOX_AGENT (or re-auth Cursor on the Mac — do not cross products)." >&2
+      return 2
+    fi
+    if [ -n "$outer" ]; then
+      printf '%s\n' "$outer"
+      return 0
+    fi
+    printf '%s\n' "$SANDBOX_AGENT"
+    return 0
+  fi
+
+  if [ -n "$outer" ]; then
+    printf '%s\n' "$outer"
     return 0
   fi
 

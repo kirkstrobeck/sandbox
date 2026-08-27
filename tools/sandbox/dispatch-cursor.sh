@@ -25,9 +25,9 @@
 # nothing.
 cursor_result_from_log() {
   local log="$1" out
-  out="$(jq -r 'select(.type == "result") | .result // empty' "$log" 2>/dev/null | tail -1 || true)"
+  out="$(jq -Rr 'fromjson? | select(.type == "result") | .result // empty' "$log" 2>/dev/null | tail -1 || true)"
   [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-  jq -r 'select(.type == "assistant")
+  jq -Rr 'fromjson? | select(.type == "assistant")
          | [.message.content[]? | select(.type == "text") | .text] | add // empty' \
     "$log" 2>/dev/null | tail -1 || true
 }
@@ -48,6 +48,7 @@ dispatch_cursor() {
   docker exec -u agent -w /workspace \
     -e "MSG_FILE=$run_dir_ctr/msg" \
     -e "LOG_FILE=$run_dir_ctr/last.jsonl" \
+    -e "ERR_FILE=$run_dir_ctr/last.err" \
     -e "SESSION_ID=$session_id" \
     -e "SANDBOX_INNER_MODEL=${SANDBOX_INNER_MODEL:-}" \
     -e "SANDBOX_MODEL_DAILY=${SANDBOX_MODEL_DAILY:-}" \
@@ -56,14 +57,14 @@ dispatch_cursor() {
       set -- -p --force --trust --sandbox disabled --output-format stream-json
       [ -n "$SESSION_ID" ] && set -- "$@" --resume "$SESSION_ID"
       [ -n "$SANDBOX_INNER_MODEL" ] && set -- "$@" --model "$SANDBOX_INNER_MODEL"
-      agent "$@" -- "$msg" >"$LOG_FILE" 2>&1
+      agent "$@" -- "$msg" >"$LOG_FILE" 2>"$ERR_FILE"
     ' </dev/null || true
 
   # Pull-only bridge; the call is here so all three backends read the same.
   bash "$SCRIPT_DIR/cursor-token-sync.sh" push >&2 || true
 
   local new_session
-  new_session="$(jq -r 'select(.session_id != null) | .session_id' \
+  new_session="$(jq -R 'fromjson? | select(.session_id != null) | .session_id' \
     "$run_dir_host/last.jsonl" 2>/dev/null | tail -1 || true)"
   [ -n "$new_session" ] && printf '%s' "$new_session" >"$session_file"
 
@@ -73,6 +74,7 @@ dispatch_cursor() {
   if [ -z "$result" ]; then
     # Not JSON at all usually means the CLI died before it started streaming —
     # an auth failure or a bad --model. That text is the fix; print it.
+    [ -s "$run_dir_host/last.err" ] && cat "$run_dir_host/last.err" >&2
     tail -20 "$run_dir_host/last.jsonl" 2>/dev/null >&2 || true
     echo "Inner Cursor produced no final message. Raw log tail is above." >&2
     return 1
@@ -81,7 +83,7 @@ dispatch_cursor() {
   printf '%s\n' "$result"
 
   local is_error
-  is_error="$(jq -r 'select(.type == "result") | .is_error' \
+  is_error="$(jq -R 'fromjson? | select(.type == "result") | .is_error' \
     "$run_dir_host/last.jsonl" 2>/dev/null | tail -1 || true)"
   [ "$is_error" = "true" ] && return 1
   return 0

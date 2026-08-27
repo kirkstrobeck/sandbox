@@ -374,6 +374,19 @@ check "claude json: empty success does not dump envelope" nodump \
 rm -rf "$_ext_dir"
 
 echo
+echo "Cursor result extraction — stderr must not corrupt stream-json"
+# shellcheck source=dispatch-cursor.sh
+. "$SCRIPT_DIR/dispatch-cursor.sh"
+_cursor_ext_dir="$(mktemp -d)"
+printf '%s\n' \
+  "cursor-retrieval: tracing to '/tmp/cursor_retrieval.abc.log'" \
+  '{"type":"result","subtype":"success","is_error":false,"result":"hello from inner cursor"}' \
+  >"$_cursor_ext_dir/mixed.jsonl"
+cursor_ext_out="$(cursor_result_from_log "$_cursor_ext_dir/mixed.jsonl")"
+check "cursor stream: skips tracing line, prints result" "hello from inner cursor" "$cursor_ext_out"
+rm -rf "$_cursor_ext_dir"
+
+echo
 echo "Worktree pointer — common dir is outside the repo"
 _wt="$(mktemp -d)"
 mkdir -p "$_wt/parent/.git/worktrees/leaf" "$_wt/leaf"
@@ -453,16 +466,46 @@ echo
 echo "Wave 1 agents — require_agent_credential is wired"
 # shellcheck source=agent.sh
 . "$SCRIPT_DIR/agent.sh"
+
+with_no_outer() {
+  local sandbox_agent="${1:-}"
+  env -u CURSOR_AGENT -u CURSOR_TRACE_ID -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT \
+     -u CLAUDE_AGENT_SDK_VERSION -u TERM_PROGRAM -u SANDBOX_AGENT \
+     SANDBOX_AGENT="$sandbox_agent" \
+     bash -c '
+      # shellcheck source=agent.sh
+      . "'"$SCRIPT_DIR"'/agent.sh"
+      resolve_sandbox_agent noprompt
+    '
+}
+
+echo
+echo "Same-product lock — outer fingerprint wins, mismatched -a is rejected"
+check "resolve_sandbox_agent: CURSOR_AGENT=1 → cursor" cursor \
+  "$(CURSOR_AGENT=1 resolve_sandbox_agent noprompt 2>/dev/null)"
+_w1_mismatch_out="$(CURSOR_AGENT=1 SANDBOX_AGENT=claude resolve_sandbox_agent noprompt 2>&1)" || _w1_mismatch_rc=$?
+check "resolve_sandbox_agent: cursor outer + claude -a → exit 2" 2 "${_w1_mismatch_rc:-0}"
+check "resolve_sandbox_agent: mismatch mentions outer agent" mismatch \
+  "$(printf '%s' "$_w1_mismatch_out" | grep -q 'outer agent is cursor' && echo mismatch || echo ok)"
+check "resolve_sandbox_agent: CURSOR_AGENT=1 + SANDBOX_AGENT=cursor → cursor" cursor \
+  "$(CURSOR_AGENT=1 SANDBOX_AGENT=cursor resolve_sandbox_agent noprompt 2>/dev/null)"
+_w1_cl_mismatch_out="$(CLAUDECODE=1 SANDBOX_AGENT=cursor resolve_sandbox_agent noprompt 2>&1)" || _w1_cl_mismatch_rc=$?
+check "resolve_sandbox_agent: claude outer + cursor -a → exit 2" 2 "${_w1_cl_mismatch_rc:-0}"
+check "resolve_sandbox_agent: no fingerprint + SANDBOX_AGENT=claude → claude" claude \
+  "$(with_no_outer claude 2>/dev/null)"
+
+echo
+echo "Wave 1 agents — require_agent_credential is wired"
 # Verify the Wave-1 placeholder is gone: none of the four should echo "Wave 1"
 for _w1_agent in copilot agy amp opencode; do
   _w1_out="$(SANDBOX_DIR="$SCRIPT_DIR" require_agent_credential "$_w1_agent" 2>&1 || true)"
   check "require_agent_credential $_w1_agent: no Wave-1 stub" absent \
     "$(printf '%s' "$_w1_out" | grep -q 'Wave 1' && echo present || echo absent)"
 done
-# resolve_sandbox_agent accepts all seven names via SANDBOX_AGENT
+# resolve_sandbox_agent accepts all seven names via SANDBOX_AGENT (no outer fingerprint)
 for _w1_agent in copilot agy amp opencode; do
   check "resolve_sandbox_agent: accepts $_w1_agent via SANDBOX_AGENT" "$_w1_agent" \
-    "$(SANDBOX_AGENT="$_w1_agent" resolve_sandbox_agent noprompt 2>/dev/null)"
+    "$(with_no_outer "$_w1_agent" 2>/dev/null)"
 done
 
 echo
