@@ -17,6 +17,9 @@
 #   ./sandbox test                            run the gate test suite
 #   ./sandbox bench                           time a canonical dispatch (writes foo.md) and print ms
 #   ./sandbox --file path                  long message, no pipe (the gate denies pipes)
+#   ./sandbox --slot 2 "task"                explicit slot
+#   ./sandbox --slot auto "task"             allocate a free slot; fail if none
+#   ./sandbox --super "big task"             super-manager fan-out
 #   ./sandbox update                          upgrade the harness from upstream
 
 set -uo pipefail

@@ -57,6 +57,10 @@ if [ -f "$RUN_DIR/last.jsonl" ]; then
 fi
 
 sandbox_docker_host
+if docker exec "$SANDBOX_NAME" pgrep -f 'sandbox-slot-' >/dev/null 2>&1; then
+  echo "Inner agent is starting; its stream appears here once the first line lands."
+  exit 0
+fi
 if docker exec "$SANDBOX_NAME" pgrep -f 'cursor-agent' >/dev/null 2>&1; then
   echo "Inner Cursor is starting; its stream appears here once the first line lands."
   exit 0

@@ -209,8 +209,9 @@ container. See [credentials.md](credentials.md).
 
 ## A manager inside, workers under it
 
-The inner run is not one agent doing the task. It is a **manager**, and the
-manager spawns **workers**.
+One **agent** is one **manager** plus the **workers** it spawns. Multiple
+concurrent agents are separate **slots** (`./sandbox --slot N`, default slot 0
+when idle). The inner run is not the manager typing the task itself.
 
 The manager reads enough of the repo to write a short spec, spawns a worker on a
 cheaper model to make the edits and run the tests, reviews what came back, and
@@ -333,10 +334,22 @@ are the OUTER agent, dispatch everything"; an inner agent reading only that file
 would dutifully try to dispatch to itself. The user-global file is what outranks
 it.
 
-Only one inner run happens at a time. Each dispatch kills any previous
-`claude -p`, `codex exec` or `cursor-agent` first: a run orphaned by a
-disconnected client is still holding the repo, and two agents editing one
-worktree produce corruption that is very hard to attribute later.
+Only one **agent** (manager + workers) occupied a slot at a time in the old
+model; that is now **multi-slot**. An **agent** is a manager+worker unit
+occupying a **slot** (`0 .. SANDBOX_MAX_SLOTS-1`, default 4).
+
+- Default `./sandbox "task"` uses slot 0 when nothing is busy — same
+  manager→worker flow, no super manager.
+- `./sandbox --slot N` / `--slot auto` run extra concurrent agents.
+- `./sandbox --super` starts a super manager that partitions, leases, and spawns
+  peers with `slot-spawn.sh`.
+- Toe-stepping controls: exclusive path-prefix leases, `slots/git.lock` for git
+  mutations, kill scope is `sandbox-slot-N` only (not a global pkill).
+- Same-product lock is unchanged — do not run a different product inside.
+- `./sandbox status` lists every busy slot.
+- Run dirs: `.cache/run/slot-N/`; `.cache/run/last.*` symlink to the foreground
+  slot so `./sandbox result` works.
+- Session/thread files are per-slot (`cursor-session-slot-N`, etc.).
 
 The answer is written to a file **inside** the container, on the bind mount. If
 your client dies mid-run the work still finishes and the answer is still on

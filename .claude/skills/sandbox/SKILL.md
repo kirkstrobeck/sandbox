@@ -14,6 +14,8 @@ reference for carrying it out.
 | --- | --- |
 | `./sandbox "task"` | Dispatch. Prints the inner agent's answer. |
 | `./sandbox -c "task"` | Dispatch continuing the previous thread. |
+| `./sandbox --slot <id\|auto> "task"` | Explicit slot or allocate a free one. |
+| `./sandbox --super "task"` | Super manager fan-out (partition + spawn peers). |
 | `./sandbox result` | Re-read the last answer without spending a run. |
 | `./sandbox tail -f` | Live progress of the current run. |
 | `./sandbox up` | Start the container (dispatch does this for you). |

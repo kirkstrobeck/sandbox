@@ -10,13 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/common.sh"
 # shellcheck source=dev-fs.sh
 . "$SCRIPT_DIR/dev-fs.sh"
+# shellcheck source=slots.sh
+. "$SCRIPT_DIR/slots.sh"
 
 sandbox_docker_host
 
 if [ "${1:-}" = "--stop" ]; then
   docker stop "$SANDBOX_NAME" >/dev/null 2>&1 && echo "Stopped $SANDBOX_NAME."
-  # Credentials and node_modules survive on purpose: stopping is a pause, not a
-  # reset. `docker rm -f` plus removing tools/sandbox/.cache is the real reset.
   exit 0
 fi
 
@@ -40,12 +40,8 @@ bridge="stopped"
 bridge_running && bridge="watching $(watch_roots | tr ':' ' ')"
 echo "hot-reload $bridge"
 
-busy=""
-docker exec "$SANDBOX_NAME" pgrep -f 'claude -p' >/dev/null 2>&1 && busy="claude"
-docker exec "$SANDBOX_NAME" pgrep -f 'codex exec' >/dev/null 2>&1 && busy="codex"
-docker exec "$SANDBOX_NAME" pgrep -f 'cursor-agent' >/dev/null 2>&1 && busy="cursor"
-docker exec "$SANDBOX_NAME" pgrep -f 'copilot -p' >/dev/null 2>&1 && busy="copilot"
-docker exec "$SANDBOX_NAME" pgrep -f 'agy -p' >/dev/null 2>&1 && busy="agy"
-docker exec "$SANDBOX_NAME" pgrep -x 'amp' >/dev/null 2>&1 && busy="amp"
-docker exec "$SANDBOX_NAME" pgrep -f 'opencode run' >/dev/null 2>&1 && busy="opencode"
+busy="$(slots_list_status 2>/dev/null || true)"
+if [ -z "$busy" ] && docker exec "$SANDBOX_NAME" pgrep -f 'sandbox-slot-' >/dev/null 2>&1; then
+  busy="starting"
+fi
 echo "inner run  ${busy:-idle}"

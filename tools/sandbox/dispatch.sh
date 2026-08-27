@@ -9,6 +9,9 @@
 #   bash tools/sandbox/dispatch.sh --continue "now fix the failure"
 #   bash tools/sandbox/dispatch.sh --agent cursor "run the test suite"
 #   bash tools/sandbox/dispatch.sh --model gpt-5 "run the test suite"
+#   bash tools/sandbox/dispatch.sh --slot 2 "task"
+#   bash tools/sandbox/dispatch.sh --slot auto "task"
+#   bash tools/sandbox/dispatch.sh --super "big task"
 #   bash tools/sandbox/dispatch.sh --file msg.txt
 #   bash tools/sandbox/dispatch.sh --result        # re-read the last answer
 #
@@ -40,6 +43,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$SCRIPT_DIR/dispatch-amp.sh"
 # shellcheck source=dispatch-opencode.sh
 . "$SCRIPT_DIR/dispatch-opencode.sh"
+# shellcheck source=slots.sh
+. "$SCRIPT_DIR/slots.sh"
 # shellcheck source=credential-expiry.sh
 . "$SCRIPT_DIR/credential-expiry.sh"
 
@@ -54,12 +59,16 @@ usage() {
 continue_flag=""
 want_result=0
 message=""
+SANDBOX_SLOT_FLAG=""
+SANDBOX_ROLE="${SANDBOX_ROLE:-agent}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -c|--continue) continue_flag="--continue"; shift ;;
     -a|--agent) SANDBOX_AGENT="${2:-}"; shift 2 ;;
     -m|--model) SANDBOX_MODEL="${2:-}"; shift 2 ;;
+    --slot) SANDBOX_SLOT_FLAG="${2:-}"; shift 2 ;;
+    --super) SANDBOX_ROLE=super; shift ;;
     --file|--message-file)
       [ -n "${2:-}" ] && [ -r "$2" ] || { echo "cannot read message file: ${2:-}" >&2; exit 2; }
       message="$(cat "$2")"
@@ -166,11 +175,17 @@ sandbox_timing "boot" "$_t_boot_start" "$(sandbox_now_ms)"
 # (same sha256 as the last copy) — one fewer docker exec on every warm boot.
 _t_agentmd_start="$(sandbox_now_ms)"
 _agent_md_src="$SCRIPT_DIR/AGENT.md"
+_super_md_src="$SCRIPT_DIR/SUPER.md"
 _agent_md_hash_file="$CACHE_DIR/.agent-md-hash"
 _agent_md_cur_hash=""
 if [ -r "$_agent_md_src" ]; then
   _agent_md_cur_hash="$(sha256sum "$_agent_md_src" 2>/dev/null | awk '{print $1}' ||
                         md5sum "$_agent_md_src" 2>/dev/null | awk '{print $1}' || true)"
+fi
+if [ -r "$_super_md_src" ]; then
+  _super_hash="$(sha256sum "$_super_md_src" 2>/dev/null | awk '{print $1}' ||
+                 md5sum "$_super_md_src" 2>/dev/null | awk '{print $1}' || true)"
+  _agent_md_cur_hash="${_agent_md_cur_hash}${_super_hash}"
 fi
 if [ -z "$_agent_md_cur_hash" ] || \
    [ "$_agent_md_cur_hash" != "$(cat "$_agent_md_hash_file" 2>/dev/null || true)" ]; then
@@ -178,40 +193,114 @@ if [ -z "$_agent_md_cur_hash" ] || \
   # slightly older one, which is not worth failing a run over.
   docker exec -u agent -e "HOME=/home/agent" "$SANDBOX_NAME" bash -c '
     src="$0"
+    super="$1"
     [ -r "$src" ] || exit 0
     mkdir -p /home/agent/.claude /home/agent/.codex /home/agent/.cursor/rules \
-             /home/agent/.gemini /home/agent/.config/amp /home/agent/.config/opencode
+             /home/agent/.gemini /home/agent/.config/amp /home/agent/.config/opencode \
+             /home/agent/.sandbox
     cp -f "$src" /home/agent/.claude/CLAUDE.md
     cp -f "$src" /home/agent/.codex/AGENTS.md
     cp -f "$src" /home/agent/.gemini/AGENTS.md
     cp -f "$src" /home/agent/.config/amp/AGENTS.md
     cp -f "$src" /home/agent/.config/opencode/instructions.md
+    if [ -r "$super" ]; then
+      cp -f "$super" /home/agent/.sandbox/SUPER.md
+    fi
     # Cursor learns a user-global rule only through the alwaysApply frontmatter
     # entrypoint.sh writes, so the same header is rebuilt around the new text.
     {
       printf -- "---\ndescription: You are the inner agent inside the sandbox container.\nalwaysApply: true\n---\n\n"
       cat "$src"
     } >/home/agent/.cursor/rules/sandbox-inner.mdc
-  ' "/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/AGENT.md" >/dev/null 2>&1 || true
+  ' "/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/AGENT.md" \
+     "/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/SUPER.md" >/dev/null 2>&1 || true
   [ -n "$_agent_md_cur_hash" ] && printf '%s' "$_agent_md_cur_hash" >"$_agent_md_hash_file"
 fi
 sandbox_timing "agent-md" "$_t_agentmd_start" "$(sandbox_now_ms)"
 
-mkdir -p "$RUN_DIR"
-printf '%s' "$message" >"$RUN_DIR/msg"
-rm -f "$RUN_DIR/last.json" "$RUN_DIR/last.txt" "$RUN_DIR/last.jsonl" "$RUN_DIR/last.err"
+_slots_ctr_path="/workspace/${SANDBOX_DIR#"$REPO_ROOT"/}/slots.sh"
+export SANDBOX_SLOT_TASK="${message%%$'\n'*}"
 
-echo "→ $agent (manager)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} ..." >&2
+# Slot selection: acquire inside the container so flock is available.
+_slot_acquire_arg=""
+if [ -n "$SANDBOX_SLOT_FLAG" ]; then
+  _slot_acquire_arg="$SANDBOX_SLOT_FLAG"
+elif [ -n "$continue_flag" ] && [ -f "$RUN_DIR/foreground-slot" ]; then
+  _slot_acquire_arg="$(cat "$RUN_DIR/foreground-slot" 2>/dev/null || true)"
+fi
+
+if [ -n "$_slot_acquire_arg" ] && [ "$_slot_acquire_arg" != "auto" ]; then
+  docker exec "$SANDBOX_NAME" pkill -f "$(slot_kill_pattern "$_slot_acquire_arg")" >/dev/null 2>&1 || true
+  docker exec -u agent \
+    -e "SANDBOX_MAX_SLOTS=${SANDBOX_MAX_SLOTS:-4}" \
+    -e "SANDBOX_AGENT=$SANDBOX_AGENT" \
+    -e "SANDBOX_ROLE=$SANDBOX_ROLE" \
+    -e "SANDBOX_SLOT_TASK=$SANDBOX_SLOT_TASK" \
+    "$SANDBOX_NAME" bash "$_slots_ctr_path" release "$_slot_acquire_arg" >/dev/null 2>&1 || true
+fi
+
+if [ -z "$_slot_acquire_arg" ]; then
+  _running="$(docker exec -u agent -e "SANDBOX_MAX_SLOTS=${SANDBOX_MAX_SLOTS:-4}" \
+    "$SANDBOX_NAME" bash "$_slots_ctr_path" list-status 2>/dev/null || true)"
+  if [ -z "$_running" ]; then
+    _slot_acquire_arg="0"
+  else
+    _slot_acquire_arg="auto"
+  fi
+fi
+
+SANDBOX_SLOT="$(docker exec -u agent \
+  -e "SANDBOX_MAX_SLOTS=${SANDBOX_MAX_SLOTS:-4}" \
+  -e "SANDBOX_AGENT=$SANDBOX_AGENT" \
+  -e "SANDBOX_ROLE=$SANDBOX_ROLE" \
+  -e "SANDBOX_SLOT_TASK=$SANDBOX_SLOT_TASK" \
+  "$SANDBOX_NAME" bash "$_slots_ctr_path" acquire "$_slot_acquire_arg" 2>/dev/null)" || {
+  docker exec -u agent \
+    -e "SANDBOX_MAX_SLOTS=${SANDBOX_MAX_SLOTS:-4}" \
+    -e "SANDBOX_AGENT=$SANDBOX_AGENT" \
+    -e "SANDBOX_ROLE=$SANDBOX_ROLE" \
+    -e "SANDBOX_SLOT_TASK=$SANDBOX_SLOT_TASK" \
+    "$SANDBOX_NAME" bash "$_slots_ctr_path" acquire "$_slot_acquire_arg" >&2
+  echo "Sandbox slot acquire failed." >&2
+  exit 1
+}
+export SANDBOX_SLOT
+
+_slots_release_foreground() {
+  [ -n "${SANDBOX_SLOT:-}" ] && [ -n "${SANDBOX_NAME:-}" ] || return 0
+  docker exec -u agent -e "SANDBOX_MAX_SLOTS=${SANDBOX_MAX_SLOTS:-4}" \
+    "$SANDBOX_NAME" bash "$_slots_ctr_path" release "$SANDBOX_SLOT" >/dev/null 2>&1 || true
+}
+trap '_slots_release_foreground' EXIT
+
+slots_prepare_run_dir "$SANDBOX_SLOT" "$RUN_DIR"
+SLOT_RUN_DIR="$RUN_DIR/slot-$SANDBOX_SLOT"
+SLOT_RUN_DIR_CTR="$RUN_DIR_CTR/slot-$SANDBOX_SLOT"
+
+if [ "$SANDBOX_ROLE" = "super" ] && [ -r "$SCRIPT_DIR/SUPER.md" ]; then
+  {
+    cat "$SCRIPT_DIR/SUPER.md"
+    printf '\n\n---\n\n'
+    printf '%s' "$message"
+  } >"$SLOT_RUN_DIR/msg"
+else
+  printf '%s' "$message" >"$SLOT_RUN_DIR/msg"
+fi
+rm -f "$SLOT_RUN_DIR/last.json" "$SLOT_RUN_DIR/last.txt" "$SLOT_RUN_DIR/last.jsonl" "$SLOT_RUN_DIR/last.err"
+
+_role_label=manager
+[ "$SANDBOX_ROLE" = "super" ] && _role_label=super
+echo "→ $agent ($_role_label)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} slot $SANDBOX_SLOT ..." >&2
 
 _t_inner_start="$(sandbox_now_ms)"
 case "$agent" in
-  claude)   dispatch_claude   "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  codex)    dispatch_codex    "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  cursor)   dispatch_cursor   "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  copilot)  dispatch_copilot  "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  agy)      dispatch_agy      "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  amp)      dispatch_amp      "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
-  opencode) dispatch_opencode "$continue_flag" "$RUN_DIR" "$RUN_DIR_CTR" ;;
+  claude)   dispatch_claude   "$continue_flag" "$SLOT_RUN_DIR" "$SLOT_RUN_DIR_CTR" ;;
+  codex)    dispatch_codex    "$continue_flag" "$SLOT_RUN_DIR" "$SLOT_RUN_DIR_CTR" ;;
+  cursor)   dispatch_cursor   "$continue_flag" "$SLOT_RUN_DIR" "$SLOT_RUN_DIR_CTR" ;;
+  copilot)  dispatch_copilot  "$continue_flag" "$SLOT_RUN_DIR" "$SLOT_RUN_DIR_CTR" ;;
+  agy)      dispatch_agy      "$continue_flag" "$SLOT_RUN_DIR" "$SLOT_RUN_DIR_CTR" ;;
+  amp)      dispatch_amp      "$continue_flag" "$SLOT_RUN_DIR" "$SLOT_RUN_DIR_CTR" ;;
+  opencode) dispatch_opencode "$continue_flag" "$SLOT_RUN_DIR" "$SLOT_RUN_DIR_CTR" ;;
 esac
 sandbox_timing "inner" "$_t_inner_start" "$(sandbox_now_ms)"
 sandbox_timing "total" "$_t_dispatch_start" "$(sandbox_now_ms)"
