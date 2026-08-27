@@ -468,6 +468,13 @@ fi
 . "$SCRIPT_DIR/credential-expiry-test.sh"
 
 echo
+echo "Syntax — dispatch and slot scripts"
+for _syn_f in dispatch.sh slots.sh slot-run.sh slot-spawn.sh status.sh; do
+  check "bash -n $_syn_f" ok \
+    "$(bash -n "$SCRIPT_DIR/$_syn_f" 2>&1 >/dev/null && echo ok || echo "syntax error")"
+done
+
+echo
 echo "Wave 1 agents — require_agent_credential is wired"
 # shellcheck source=agent.sh
 . "$SCRIPT_DIR/agent.sh"

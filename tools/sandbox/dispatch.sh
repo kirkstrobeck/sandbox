@@ -290,7 +290,9 @@ rm -f "$SLOT_RUN_DIR/last.json" "$SLOT_RUN_DIR/last.txt" "$SLOT_RUN_DIR/last.jso
 
 _role_label=manager
 [ "$SANDBOX_ROLE" = "super" ] && _role_label=super
-echo "→ $agent ($_role_label)${SANDBOX_INNER_MODEL:+ · $SANDBOX_INNER_MODEL} slot $SANDBOX_SLOT ..." >&2
+_model_bit=""
+[ -n "${SANDBOX_INNER_MODEL:-}" ] && _model_bit=" · $SANDBOX_INNER_MODEL"
+echo "→ $agent ($_role_label)${_model_bit} slot $SANDBOX_SLOT ..." >&2
 
 _t_inner_start="$(sandbox_now_ms)"
 case "$agent" in
