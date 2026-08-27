@@ -5,7 +5,7 @@
 # Bump `version` whenever the set of paths changes. It is not used for
 # comparison — the path lists are — but it gives a human something to point at.
 
-version 7
+version 8
 
 # Modes
 #
@@ -51,6 +51,11 @@ replace  tools/sandbox/dispatch-agy.sh
 replace  tools/sandbox/dispatch-amp.sh
 replace  tools/sandbox/dispatch-opencode.sh
 replace  tools/sandbox/dispatch.sh
+replace  tools/sandbox/slots.sh
+replace  tools/sandbox/slot-run.sh
+replace  tools/sandbox/slot-spawn.sh
+replace  tools/sandbox/slots-test.sh
+replace  tools/sandbox/SUPER.md
 replace  tools/sandbox/doctor.sh
 replace  tools/sandbox/entrypoint.sh
 replace  tools/sandbox/gate-lib.sh

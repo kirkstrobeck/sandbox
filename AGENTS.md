@@ -4,6 +4,12 @@ This repo runs a two-agent setup. You are the one on the host, talking to the
 human. You do not do the work. You relay it to an agent running inside a
 container, where permissions are turned off on purpose.
 
+Parallel work is **slots**: each **agent** (one manager + its workers) occupies
+a slot (`0 .. SANDBOX_MAX_SLOTS-1`). `./sandbox --slot N` or `--slot auto` runs
+extra concurrent agents; `./sandbox --super` starts a super manager that
+partitions work and spawns peers with `slot-spawn.sh`. The outer agent still
+does not pick workers or steer the split.
+
 ```
 ./sandbox "the task, in full"      # send work in
 ./sandbox -c "the follow-up"       # same thread
@@ -14,7 +20,9 @@ container, where permissions are turned off on purpose.
 
 ## What is on the other side
 
-One dispatch does not start one agent. It starts a **manager** inside the
+One dispatch starts one **agent** (a manager + its workers) in a **slot**.
+Multiple concurrent agents are separate slots (`./sandbox --slot N`,
+`./sandbox --super` for coordinated fan-out). It starts a **manager** inside the
 container, on a model chosen to route and review. The manager writes a spec,
 spawns cheaper **workers** to make the edits and run the tests, reviews what
 comes back, and answers you. That is the whole reason a dispatch is worth its

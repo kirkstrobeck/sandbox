@@ -96,6 +96,9 @@ bash_case allow './sandbox "fix the header"'
 bash_case allow './sandbox -c "now add a test"'
 bash_case allow './sandbox -a cursor "fix the header"'
 bash_case allow './sandbox -m gpt-5 "fix the header"'
+bash_case allow './sandbox --slot 2 "task"'
+bash_case allow './sandbox --slot auto "task"'
+bash_case allow './sandbox --super "partitioned task"'
 bash_case allow './sandbox run pnpm test'
 bash_case allow './sandbox status'
 # The deliberate exception: `update` writes to tools/sandbox on the host. It is
@@ -459,6 +462,8 @@ fi
 # Autoupdate predicate: sandbox_autoupdate_should and update.sh syntax.
 # shellcheck source=update-test.sh
 . "$SCRIPT_DIR/update-test.sh"
+# shellcheck source=slots-test.sh
+. "$SCRIPT_DIR/slots-test.sh"
 # shellcheck source=credential-expiry-test.sh
 . "$SCRIPT_DIR/credential-expiry-test.sh"
 

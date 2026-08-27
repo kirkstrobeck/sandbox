@@ -318,6 +318,12 @@ the shipped default, or when a default has gone stale. The id is handed through
 verbatim, so it has to be one the chosen agent understands. Full resolution
 order: [agents.md](agents.md).
 
+## `SANDBOX_MAX_SLOTS`
+
+Default `4`. Maximum concurrent **agents** (each a manager + its workers) in one
+container. Runtime setting in `sandbox.conf` — no image rebuild. Slot registry
+state lives under `tools/sandbox/.cache/slots/` (gitignored via `.cache`).
+
 ## The daily model snapshot
 
 The harness fetches a small model/plan/promo digest **on the host**, at most once

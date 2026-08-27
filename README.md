@@ -64,7 +64,9 @@ Tokens build scripts; only scripts do the work; those scripts stay in the repo.
 
 The manager model is `SANDBOX_MODEL` (`./sandbox -m <id>`, one run), else the
 daily snapshot's `<agent>_manager=` line, else `SANDBOX_DEFAULT_MODEL`, else a
-high-value default per agent. The snapshot is model/plan/promo text the host
+high-value default per agent. Parallel **agents** are separate **slots**
+(`./sandbox --slot N`, `./sandbox --super` for coordinated fan-out). The
+snapshot is model/plan/promo text the host
 fetches at most once a day into `$TMPDIR/sandbox-model-daily` and passes in as
 an environment variable — read first, shared by every sandbox on the machine,
 and never mounted into the container. Details in
@@ -112,6 +114,8 @@ new one and removes what the harness stopped shipping; your `sandbox.conf`,
 | `./sandbox -c "task"` | Continue the previous thread. |
 | `./sandbox -a claude\|codex\|cursor "task"` | Pick the inner agent for one run. |
 | `./sandbox -m <model-id> "task"` | Pin the inner manager's model for one run. |
+| `./sandbox --slot <id\|auto> "task"` | Run in an explicit slot or allocate a free one. |
+| `./sandbox --super "task"` | Super manager: partition work and spawn peer agents. |
 | `./sandbox --file <path>` | Long message from a file (pipes are denied by the gate). |
 | `./sandbox result` | Re-read the last answer without spending a run. |
 | `./sandbox tail [-f]` | Watch the run. |
