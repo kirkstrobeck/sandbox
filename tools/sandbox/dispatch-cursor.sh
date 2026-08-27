@@ -64,7 +64,7 @@ dispatch_cursor() {
   bash "$SCRIPT_DIR/cursor-token-sync.sh" push >&2 || true
 
   local new_session
-  new_session="$(jq -R 'fromjson? | select(.session_id != null) | .session_id' \
+  new_session="$(jq -Rr 'fromjson? | select(.session_id != null) | .session_id' \
     "$run_dir_host/last.jsonl" 2>/dev/null | tail -1 || true)"
   [ -n "$new_session" ] && printf '%s' "$new_session" >"$session_file"
 
@@ -83,7 +83,7 @@ dispatch_cursor() {
   printf '%s\n' "$result"
 
   local is_error
-  is_error="$(jq -R 'fromjson? | select(.type == "result") | .is_error' \
+  is_error="$(jq -Rr 'fromjson? | select(.type == "result") | .is_error' \
     "$run_dir_host/last.jsonl" 2>/dev/null | tail -1 || true)"
   [ "$is_error" = "true" ] && return 1
   return 0
