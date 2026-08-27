@@ -90,8 +90,10 @@ instead. `SANDBOX_UPDATE_CHECK=0` silences both.
 
 The inner agent is the same product as the outer one, auto-detected from your
 own environment: Codex outer → Codex inner, Claude → Claude, Cursor → Cursor.
-Override per dispatch with `./sandbox -a cursor "task"`, or permanently with
-`SANDBOX_DEFAULT_AGENT` in `tools/sandbox/sandbox.conf`.
+Use `./sandbox -a cursor "task"` only when no outer fingerprint is present; a
+mismatch is rejected. Set `SANDBOX_DEFAULT_AGENT` in
+`tools/sandbox/sandbox.conf` for a permanent default when detection does not
+apply.
 
 **Not the same model.** What a dispatch starts is a manager: it writes a spec,
 spawns cheaper workers for the edits and the tests, reviews, and answers. The

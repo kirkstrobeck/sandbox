@@ -48,10 +48,12 @@ agent that wrote it and the agent that reads it disagree about their own
 conventions.
 
 Detection reads what the outer client leaves in the environment, in this order:
-`SANDBOX_AGENT` → Codex (`CODEX_*`, `TERM_PROGRAM=codex`) → Claude
-(`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`) → Cursor (`CURSOR_AGENT`,
-`CURSOR_TRACE_ID`) → `SANDBOX_DEFAULT_AGENT`. Override one run with
-`./sandbox -a cursor "task"`.
+Codex (`CODEX_*`, `TERM_PROGRAM=codex`) → Claude (`CLAUDECODE`,
+`CLAUDE_CODE_ENTRYPOINT`) → Cursor (`CURSOR_AGENT`, `CURSOR_TRACE_ID`). When
+any match, that is the inner agent; a mismatched `SANDBOX_AGENT` or `-a` is
+rejected. With no fingerprint: `SANDBOX_AGENT` → prompt (interactive only) →
+`SANDBOX_DEFAULT_AGENT`. Use `./sandbox -a cursor "task"` only on a bare
+terminal with nothing to detect.
 
 ### Manager inside, workers under it
 

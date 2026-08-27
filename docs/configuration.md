@@ -293,10 +293,12 @@ detail and the measured numbers behind the design are in
 
 Default `claude`. `claude`, `codex` or `cursor`. Used only when nothing can be
 auto-detected from the environment your outer client leaves behind — normally
-the inner agent matches the outer one and nothing has to be set here. Override
-for a single run with `./sandbox -a cursor "task"`, or for a shell with
-`SANDBOX_AGENT`. Detection order, and why Codex is checked first and Cursor
-last: [agents.md](agents.md).
+the inner agent matches the outer one and nothing has to be set here. When no
+outer fingerprint is present, override for a single run with
+`./sandbox -a cursor "task"`, or for a shell with `SANDBOX_AGENT`. A mismatched
+`-a` or `SANDBOX_AGENT` is rejected when an outer fingerprint is detected.
+Detection order, and why Codex is checked first and Cursor last:
+[agents.md](agents.md).
 
 ## `SANDBOX_DEFAULT_MODEL`
 
@@ -515,7 +517,7 @@ SANDBOX_AUTH_WARN_HOURS="24"
 
 | Variable | Effect |
 | --- | --- |
-| `SANDBOX_AGENT` | Inner agent for this invocation. Beats detection and the default. |
+| `SANDBOX_AGENT` | Inner agent for this invocation when no outer fingerprint is detected. Rejected if it disagrees with a detected outer agent. |
 | `SANDBOX_MODEL` | Manager model for this invocation. Beats the snapshot and `SANDBOX_DEFAULT_MODEL`. What `./sandbox -m` sets. |
 | `SANDBOX_MODEL_DAILY` | Today's model/plan/promo snapshot. Set by `dispatch.sh` and passed into the container; set it yourself to override for one run. |
 | `SANDBOX_MODEL_DAILY_FILE` / `_MAX_AGE` / `_TIMEOUT` / `_FETCH_CMD` | Where that snapshot lives, when it goes stale, how long a fetch may take, and what to fetch with. |
