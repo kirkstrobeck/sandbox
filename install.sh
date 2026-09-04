@@ -356,6 +356,28 @@ else
   put ".cursor/hooks.json (sandbox hooks wired)"
 fi
 
+# --- codex hooks: merged, never clobbered -----------------------------------
+# Project-local Codex hooks live in .codex/hooks.json. Drop any previous
+# sandbox hook entries and re-add the current versions, leaving unrelated Codex
+# hooks untouched. Codex may ask the user to review/trust changed project hooks
+# on the next client start.
+if [ -n "$DRY_RUN" ]; then
+  put ".codex/hooks.json (sandbox hooks wired)"
+else
+  codex_hooks="$TARGET/.codex/hooks.json"
+  mkdir -p "$TARGET/.codex"
+  [ -f "$codex_hooks" ] || printf '{"hooks":{}}\n' >"$codex_hooks"
+  jq --slurpfile new "$SRC/tools/sandbox/codex-hooks.json" '
+    .hooks = (.hooks // {}) |
+    .hooks.PreToolUse = (
+      ((.hooks.PreToolUse // []) | map(select(
+         ((.hooks // []) | map(.command // "") | join(" "))
+         | test("\\.codex/hooks/sandbox-(shell|write)\\.sh") | not)))
+      + $new[0].hooks.PreToolUse)
+  ' "$codex_hooks" >"$codex_hooks.tmp" && mv "$codex_hooks.tmp" "$codex_hooks"
+  put ".codex/hooks.json (sandbox hooks wired)"
+fi
+
 # --- gitignore: the cache holds live credentials ----------------------------
 # Written whether or not this directory is a git repo. If it becomes one later,
 # the ignore lines are already there and the tokens under .cache never get a
@@ -390,14 +412,14 @@ if [ -n "$DRY_RUN" ]; then
   say "Dry run complete. Nothing was written."
 elif [ -n "$had_harness" ]; then
   say "Done. Harness upgraded from $REPO@$REF; sandbox.conf kept."
-  say "Restart your agent client if the PreToolUse hooks changed."
+  say "Restart your agent client if the PreToolUse hooks changed. Codex may ask you to review/trust changed project hooks."
 else
   say "Done. Next:"
   say "  1. edit tools/sandbox/sandbox.conf   (ports, watch dirs, volumes)"
   say "  2. ./sandbox doctor                  (checks the host, names every fix)"
   say "  3. ./sandbox \"say hello and list the files you can see\""
   say ""
-  say "Restart your agent client so it picks up the new PreToolUse hooks."
+  say "Restart your agent client so it picks up the new PreToolUse hooks. Codex may ask you to review/trust changed project hooks."
 fi
 say ""
 say "From https://github.com/$REPO — git@github.com:$REPO.git"

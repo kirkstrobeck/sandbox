@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Bash. Wired in .claude/settings.json.
+# PreToolUse hook for Bash. Wired in .claude/settings.json and .codex/hooks.json.
 #
 # THE RULE THIS ENFORCES: the outer agent never does the work. It relays. The
 # work happens inside the container, where permissions are off on purpose.
@@ -128,8 +128,8 @@ esac
 
 # --- Allowed: reading sandbox config and docs on the host -------------------
 case "$stripped" in
-  cat\ .claude/*|cat\ tools/sandbox/*|cat\ AGENTS.md*|cat\ README.md*|\
-  ls\ .claude*|ls\ tools/sandbox*|ls\ .cursor*)
+  cat\ .claude/*|cat\ .codex/*|cat\ tools/sandbox/*|cat\ AGENTS.md*|cat\ README.md*|\
+  ls\ .claude*|ls\ .codex*|ls\ tools/sandbox*|ls\ .cursor*)
     allow_unchained "reading sandbox configuration" ;;
 esac
 

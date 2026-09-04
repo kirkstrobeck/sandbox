@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Edit|Write|MultiEdit|NotebookEdit. Wired in
-# .claude/settings.json alongside outer-gate.sh.
+# PreToolUse hook for Edit|Write|MultiEdit|NotebookEdit and Codex apply_patch.
+# Wired in .claude/settings.json and .codex/hooks.json alongside outer-gate.sh.
 #
 # WHY THIS EXISTS: blocking Bash is only half the boundary. An outer agent that
 # is denied every shell path into the repo will reach for the Edit tool instead
@@ -45,7 +45,7 @@ gate_resolve() {
   local path="$1"
   case "$path" in
     /*) : ;;
-    *) path="$PWD/$path" ;;
+    *) path="${HOOK_CWD:-$PWD}/$path" ;;
   esac
   path="$(gate_normalize "$path")"
 
@@ -84,6 +84,7 @@ gate_is_outer_state() {
   case "$1/" in
     "${HOME:-/nonexistent}/.claude/"*) return 0 ;;
     /private/tmp/claude-*/*|/tmp/claude-*/*) return 0 ;;
+    "${HOME:-/nonexistent}/.codex/"*) return 0 ;;
   esac
   return 1
 }
@@ -98,6 +99,7 @@ gate_is_allowed() {
   esac
   case "$p/" in
     "$PROJECT_ROOT/.claude/"*) return 0 ;;
+    "$PROJECT_ROOT/.codex/"*) return 0 ;;
     "$PROJECT_ROOT/.cursor/"*) return 0 ;;
     "$PROJECT_ROOT/tools/sandbox/"*) return 0 ;;
   esac
@@ -112,6 +114,16 @@ gate_is_allowed() {
 
 payload="$(gate_read_payload)"
 tool="$(printf '%s' "$payload" | jq -r '.tool_name // "edit"' 2>/dev/null)"
+HOOK_CWD="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+
+gate_patch_paths() {
+  awk '
+    /^\*\*\* (Add File|Delete File|Update File|Move to): / {
+      sub(/^\*\*\* (Add File|Delete File|Update File|Move to): /, "")
+      print
+    }
+  '
+}
 
 # Every shape these tools use to name a target, in one expression. A new field
 # added upstream shows up as "no paths found", which denies — the safe way for
@@ -122,6 +134,14 @@ paths="$(printf '%s' "$payload" | jq -r '
     (.tool_input.edits? // [] | .[]? | .file_path?),
     .file_path? ]
   | map(select(type == "string" and length > 0)) | .[]' 2>/dev/null)"
+
+patch_paths="$(printf '%s' "$payload" | jq -r '
+  select((.tool_name? // "") == "apply_patch")
+  | .tool_input.command? // empty' 2>/dev/null | gate_patch_paths)"
+if [ -n "$patch_paths" ]; then
+  paths="${paths}${paths:+
+}$patch_paths"
+fi
 
 if [ -z "$paths" ]; then
   deny "Could not read a file path from this $tool call, so it cannot be judged. $DISPATCH_MSG"

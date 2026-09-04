@@ -206,6 +206,13 @@ if [ -f "$REPO_ROOT/.claude/settings.json" ] &&
 else
   warn "Claude hooks not wired — the outer agent can still act on the host"
 fi
+if [ -f "$REPO_ROOT/.codex/hooks.json" ] &&
+   grep -q 'sandbox-shell.sh' "$REPO_ROOT/.codex/hooks.json" 2>/dev/null &&
+   grep -q 'sandbox-write.sh' "$REPO_ROOT/.codex/hooks.json" 2>/dev/null; then
+  ok "PreToolUse hooks wired in .codex/hooks.json"
+else
+  warn "Codex hooks not wired in .codex/hooks.json — Codex outer agent is not enforced"
+fi
 if [ -f "$REPO_ROOT/.cursor/hooks.json" ] &&
    grep -q 'sandbox-shell' "$REPO_ROOT/.cursor/hooks.json" 2>/dev/null; then
   ok "beforeShellExecution wired in .cursor/hooks.json"

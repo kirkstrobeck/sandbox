@@ -91,6 +91,8 @@ Then:
 ```
 
 Restart your agent client afterward so it picks up the new PreToolUse hooks.
+Codex may ask you to review/trust changed project hooks after install or
+upgrade.
 
 **`tools/sandbox/` is harness-owned.** Put project scripts in `tools/`, not
 `tools/sandbox/`. An install or update may delete anything else in that

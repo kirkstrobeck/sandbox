@@ -5,7 +5,7 @@
 # Bump `version` whenever the set of paths changes. It is not used for
 # comparison — the path lists are — but it gives a human something to point at.
 
-version 8
+version 9
 
 # Modes
 #
@@ -62,6 +62,7 @@ replace  tools/sandbox/gate-lib.sh
 replace  tools/sandbox/gate-test.sh
 replace  tools/sandbox/github-token-sync.sh
 replace  tools/sandbox/hooks.json
+replace  tools/sandbox/codex-hooks.json
 replace  tools/sandbox/mac-save-bridge.mjs
 replace  tools/sandbox/model.sh
 replace  tools/sandbox/model-daily.sh
@@ -91,6 +92,10 @@ preserve AGENTS.md
 preserve CLAUDE.md
 preserve .cursor/rules/sandbox.mdc
 
+# --- Codex outer hooks (harness-owned, replaced on every install) -----------
+replace  .codex/hooks/sandbox-shell.sh
+replace  .codex/hooks/sandbox-write.sh
+
 # --- Cursor outer hooks (harness-owned, replaced on every install) -----------
 replace  .cursor/hooks/sandbox-shell.sh
 replace  .cursor/hooks/sandbox-write.sh
@@ -105,5 +110,6 @@ manage   tools/sandbox/.install-hashes      # generated: replace-file hashes for
 manage   tools/sandbox/outer-gate-deny.d       # project deny hooks; contents survive updates
 manage   tools/sandbox/outer-write-gate-deny.d # project write-gate deny hooks; contents survive updates
 manage   .claude/settings.json              # PreToolUse gates merged in
+manage   .codex/hooks.json                  # sandbox hooks merged in
 manage   .cursor/hooks.json                 # sandbox hooks merged in
 manage   .gitignore                         # credential paths appended

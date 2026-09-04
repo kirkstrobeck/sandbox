@@ -48,6 +48,25 @@ cursor_read_case() {
   check "cursor read: $path" "$expected" "$(cursor_decision_of "$out")"
 }
 
+codex_shell_case() {
+  local expected="$1" cmd="$2"
+  local out
+  out="$(jq -nc --arg c "$cmd" --arg cwd "$PROJECT_ROOT" \
+    '{tool_name:"Bash",cwd:$cwd,tool_input:{command:$c}}' |
+    bash "$PROJECT_ROOT/.codex/hooks/sandbox-shell.sh" 2>/dev/null)"
+  check "codex shell: $cmd" "$expected" "$(decision_of "$out")"
+}
+
+codex_patch_case() {
+  local expected="$1" path="$2"
+  local out patch
+  patch="$(printf '*** Begin Patch\n*** Update File: %s\n@@\n-old\n+new\n*** End Patch\n' "$path")"
+  out="$(jq -nc --arg p "$patch" --arg cwd "$PROJECT_ROOT" \
+    '{tool_name:"apply_patch",cwd:$cwd,tool_input:{command:$p}}' |
+    bash "$PROJECT_ROOT/.codex/hooks/sandbox-write.sh" 2>/dev/null)"
+  check "codex apply_patch: $path" "$expected" "$(decision_of "$out")"
+}
+
 check() {
   local label="$1" expected="$2" actual="$3"
   if [ "$expected" = "$actual" ]; then
@@ -148,6 +167,8 @@ echo
 echo "Write gate — the harness and agent config are the outer agent's own"
 write_case allow "$PROJECT_ROOT/.claude/settings.json"
 write_case allow "$PROJECT_ROOT/.claude/skills/sandbox/SKILL.md"
+write_case allow "$PROJECT_ROOT/.codex/hooks.json"
+write_case allow "$PROJECT_ROOT/.codex/hooks/sandbox-write.sh"
 write_case allow "$PROJECT_ROOT/.cursor/rules/sandbox.mdc"
 write_case allow "$PROJECT_ROOT/tools/sandbox/sandbox.conf"
 write_case allow "$PROJECT_ROOT/sandbox"
@@ -188,6 +209,33 @@ inner_cursor="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
   'jq -nc "{command:\"git status\"}" | GATE_PROTOCOL=cursor bash "$0"' \
   "$SCRIPT_DIR/outer-gate.sh" 2>/dev/null)"
 check "cursor shell: git status (SANDBOX_INNER=1)" allow "$(cursor_decision_of "$inner_cursor")"
+
+echo
+echo "Codex protocol — project hooks use the shared permissionDecision envelope"
+codex_shell_case deny  'git status'
+codex_shell_case allow './sandbox "x"'
+codex_patch_case deny  'src/app.ts'
+codex_patch_case allow '.codex/hooks.json'
+codex_patch_case allow 'tools/sandbox/outer-write-gate.sh'
+codex_patch_multi="$(printf '%s\n' \
+  '*** Begin Patch' \
+  '*** Update File: .codex/hooks.json' \
+  '@@' \
+  '-old' \
+  '+new' \
+  '*** Update File: src/app.ts' \
+  '@@' \
+  '-old' \
+  '+new' \
+  '*** End Patch')"
+out_codex_multi="$(jq -nc --arg p "$codex_patch_multi" --arg cwd "$PROJECT_ROOT" \
+  '{tool_name:"apply_patch",cwd:$cwd,tool_input:{command:$p}}' |
+  bash "$PROJECT_ROOT/.codex/hooks/sandbox-write.sh" 2>/dev/null)"
+check "codex apply_patch: one allowed + one denied" deny "$(decision_of "$out_codex_multi")"
+inner_codex="$(SANDBOX_GATE_FORCE= SANDBOX_INNER=1 bash -c \
+  'jq -nc "{tool_name:\"Bash\",tool_input:{command:\"git status\"}}" | bash "$0"' \
+  "$PROJECT_ROOT/.codex/hooks/sandbox-shell.sh" 2>/dev/null)"
+check "codex shell: git status (SANDBOX_INNER=1)" allow "$(decision_of "$inner_codex")"
 
 echo
 echo "Write gate — .cache is denied even though tools/sandbox/ is broadly allowed"
@@ -479,29 +527,38 @@ echo "Wave 1 agents — require_agent_credential is wired"
 # shellcheck source=agent.sh
 . "$SCRIPT_DIR/agent.sh"
 
+clean_outer_env() {
+  env -u CODEX_CI -u CODEX_PERMISSION_PROFILE -u CODEX_SANDBOX \
+     -u CODEX_SANDBOX_NETWORK_DISABLED -u CODEX_SESSION_ID \
+     -u CODEX_THREAD_ID -u CURSOR_AGENT -u CURSOR_TRACE_ID \
+     -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT \
+     -u CLAUDE_AGENT_SDK_VERSION -u TERM_PROGRAM -u SANDBOX_AGENT "$@"
+}
+
+resolve_clean_agent() {
+  clean_outer_env "$@" bash -c '
+    # shellcheck source=agent.sh
+    . "'"$SCRIPT_DIR"'/agent.sh"
+    resolve_sandbox_agent noprompt
+  '
+}
+
 with_no_outer() {
   local sandbox_agent="${1:-}"
-  env -u CURSOR_AGENT -u CURSOR_TRACE_ID -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT \
-     -u CLAUDE_AGENT_SDK_VERSION -u TERM_PROGRAM -u SANDBOX_AGENT \
-     SANDBOX_AGENT="$sandbox_agent" \
-     bash -c '
-      # shellcheck source=agent.sh
-      . "'"$SCRIPT_DIR"'/agent.sh"
-      resolve_sandbox_agent noprompt
-    '
+  resolve_clean_agent SANDBOX_AGENT="$sandbox_agent"
 }
 
 echo
 echo "Same-product lock — outer fingerprint wins, mismatched -a is rejected"
 check "resolve_sandbox_agent: CURSOR_AGENT=1 → cursor" cursor \
-  "$(CURSOR_AGENT=1 resolve_sandbox_agent noprompt 2>/dev/null)"
-_w1_mismatch_out="$(CURSOR_AGENT=1 SANDBOX_AGENT=claude resolve_sandbox_agent noprompt 2>&1)" || _w1_mismatch_rc=$?
+  "$(resolve_clean_agent CURSOR_AGENT=1 2>/dev/null)"
+_w1_mismatch_out="$(resolve_clean_agent CURSOR_AGENT=1 SANDBOX_AGENT=claude 2>&1)" || _w1_mismatch_rc=$?
 check "resolve_sandbox_agent: cursor outer + claude -a → exit 2" 2 "${_w1_mismatch_rc:-0}"
 check "resolve_sandbox_agent: mismatch mentions outer agent" mismatch \
   "$(printf '%s' "$_w1_mismatch_out" | grep -q 'outer agent is cursor' && echo mismatch || echo ok)"
 check "resolve_sandbox_agent: CURSOR_AGENT=1 + SANDBOX_AGENT=cursor → cursor" cursor \
-  "$(CURSOR_AGENT=1 SANDBOX_AGENT=cursor resolve_sandbox_agent noprompt 2>/dev/null)"
-_w1_cl_mismatch_out="$(CLAUDECODE=1 SANDBOX_AGENT=cursor resolve_sandbox_agent noprompt 2>&1)" || _w1_cl_mismatch_rc=$?
+  "$(resolve_clean_agent CURSOR_AGENT=1 SANDBOX_AGENT=cursor 2>/dev/null)"
+_w1_cl_mismatch_out="$(resolve_clean_agent CLAUDECODE=1 SANDBOX_AGENT=cursor 2>&1)" || _w1_cl_mismatch_rc=$?
 check "resolve_sandbox_agent: claude outer + cursor -a → exit 2" 2 "${_w1_cl_mismatch_rc:-0}"
 check "resolve_sandbox_agent: no fingerprint + SANDBOX_AGENT=claude → claude" claude \
   "$(with_no_outer claude 2>/dev/null)"

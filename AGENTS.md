@@ -40,9 +40,10 @@ Not editing any file under this repo except the harness itself. Not `curl` to
 anywhere but loopback.
 
 This is enforced, not requested: `tools/sandbox/outer-gate.sh` and
-`tools/sandbox/outer-write-gate.sh` run as PreToolUse hooks and deny those calls
-before they execute. If you get a denial, you have not found an obstacle — you
-have found the design. Dispatch instead.
+`tools/sandbox/outer-write-gate.sh` run as Claude and Codex PreToolUse hooks
+and deny those calls before they execute. Cursor uses the same gates through its
+own hook names. If you get a denial, you have not found an obstacle — you have
+found the design. Dispatch instead.
 
 You may: read files, search, run `./sandbox ...`, inspect Docker and Colima,
 and `curl` a localhost port to check the dev server is up.
